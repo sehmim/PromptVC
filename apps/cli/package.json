@@ -1,0 +1,29 @@
+{
+  "name": "@promptvc/cli",
+  "version": "0.1.0",
+  "description": "CLI tool to wrap AI assistants and log prompts/diffs",
+  "main": "dist/index.js",
+  "bin": {
+    "promptvc": "bin/promptvc",
+    "promptvc-codex": "bin/promptvc-codex"
+  },
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@promptvc/types": "workspace:*",
+    "better-sqlite3": "^9.2.2",
+    "commander": "^11.1.0",
+    "simple-git": "^3.22.0",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.8",
+    "@types/node": "^20.10.6",
+    "@types/uuid": "^9.0.7",
+    "typescript": "^5.3.3"
+  }
+}

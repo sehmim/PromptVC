@@ -1,0 +1,65 @@
+{
+  "name": "promptvc-vscode",
+  "displayName": "PromptVC",
+  "description": "View and explore AI prompt sessions tracked by PromptVC",
+  "version": "0.1.0",
+  "publisher": "promptvc",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:promptvcSessions"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "views": {
+      "explorer": [
+        {
+          "id": "promptvcSessions",
+          "name": "PromptVC Sessions"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "promptvc.showSessionDiff",
+        "title": "PromptVC: Show Session Diff"
+      },
+      {
+        "command": "promptvc.refreshSessions",
+        "title": "PromptVC: Refresh Sessions",
+        "icon": "$(refresh)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "promptvc.refreshSessions",
+          "when": "view == promptvcSessions",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "@promptvc/types": "workspace:*",
+    "better-sqlite3": "^9.2.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.8",
+    "@types/node": "^20.10.6",
+    "@types/vscode": "^1.80.0",
+    "@vscode/vsce": "^2.22.0",
+    "typescript": "^5.3.3"
+  }
+}
