@@ -23,6 +23,9 @@ export interface PromptSession {
   createdAt: string; // ISO timestamp
   mode: 'oneshot' | 'interactive';
   autoTagged: boolean;
+  hidden?: boolean;
+  flagged?: boolean;
+  tags?: string[];
 
   /**
    * Per-prompt changes captured during interactive sessions

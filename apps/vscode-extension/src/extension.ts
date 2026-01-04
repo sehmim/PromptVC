@@ -3,6 +3,39 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { PromptSession, PromptChange } from '@promptvc/types';
 
+function normalizeTagsInput(input: string): string[] {
+  const tags = input
+    .split(',')
+    .map(tag => tag.trim())
+    .filter(Boolean);
+  return Array.from(new Set(tags));
+}
+
+function formatTagsLabel(tags?: string[]): string | null {
+  if (!tags || tags.length === 0) {
+    return null;
+  }
+
+  const visibleTags = tags.slice(0, 3);
+  const extraCount = tags.length - visibleTags.length;
+  const extraLabel = extraCount > 0 ? ` +${extraCount}` : '';
+  return `tags: ${visibleTags.join(', ')}${extraLabel}`;
+}
+
+function normalizeSessionMetadata(session: PromptSession): PromptSession {
+  const normalized = { ...session };
+  if (!normalized.tags || normalized.tags.length === 0) {
+    delete normalized.tags;
+  }
+  if (!normalized.flagged) {
+    delete normalized.flagged;
+  }
+  if (!normalized.hidden) {
+    delete normalized.hidden;
+  }
+  return normalized;
+}
+
 /**
  * TreeItem representing a file changed in a prompt
  */
@@ -78,14 +111,18 @@ class PromptSessionTreeItem extends vscode.TreeItem {
     public readonly isInProgress: boolean = false
   ) {
     // Create a more descriptive label
-    let label = session.prompt.substring(0, 70);
+    const labelPrefixes: string[] = [];
+    if (session.hidden) {
+      labelPrefixes.push('HIDDEN');
+    }
+    if (session.flagged) {
+      labelPrefixes.push('FLAG');
+    }
+    const labelPrefix = labelPrefixes.length > 0 ? `[${labelPrefixes.join(', ')}] ` : '';
+
+    let label = `${labelPrefix}${session.prompt.substring(0, 70)}`;
     if (session.prompt.length > 70) {
       label += '...';
-    }
-
-    // Add "In Progress" prefix for active sessions
-    if (isInProgress) {
-      label = `🔴 ${label}`;
     }
 
     super(label, collapsibleState);
@@ -96,35 +133,62 @@ class PromptSessionTreeItem extends vscode.TreeItem {
     const modeLabel = session.mode === 'oneshot' ? 'One-shot' : 'Interactive';
     const statusLabel = isInProgress ? ' (IN PROGRESS)' : '';
 
-    this.tooltip = `${session.prompt}${statusLabel}\n\nMode: ${modeLabel}\nPrompts: ${promptCount}\nFiles: ${totalFiles}\nDate: ${new Date(session.createdAt).toLocaleString()}`;
+    const metaLines: string[] = [];
+    if (session.hidden) {
+      metaLines.push('Hidden: yes');
+    }
+    if (session.flagged) {
+      metaLines.push('Flagged: yes');
+    }
+    if (session.tags && session.tags.length > 0) {
+      metaLines.push(`Tags: ${session.tags.join(', ')}`);
+    }
+    const metaSection = metaLines.length > 0 ? `${metaLines.join('\n')}\n\n` : '';
+
+    this.tooltip = `${session.prompt}${statusLabel}\n\n${metaSection}Mode: ${modeLabel}\nPrompts: ${promptCount}\nFiles: ${totalFiles}\nDate: ${new Date(session.createdAt).toLocaleString()}`;
 
     // Show prompt count for interactive sessions
+    let description: string;
     if (isInProgress) {
-      this.description = `IN PROGRESS • ${session.perPromptChanges?.length || 0} prompt${(session.perPromptChanges?.length || 0) !== 1 ? 's' : ''}`;
+      description = `IN PROGRESS • ${session.perPromptChanges?.length || 0} prompt${(session.perPromptChanges?.length || 0) !== 1 ? 's' : ''}`;
     } else if (session.perPromptChanges && session.perPromptChanges.length > 0) {
-      this.description = `${session.perPromptChanges.length} prompt${session.perPromptChanges.length !== 1 ? 's' : ''} • ${totalFiles} file${totalFiles !== 1 ? 's' : ''}`;
+      description = `${session.perPromptChanges.length} prompt${session.perPromptChanges.length !== 1 ? 's' : ''} • ${totalFiles} file${totalFiles !== 1 ? 's' : ''}`;
     } else {
-      this.description = `${totalFiles} file${totalFiles !== 1 ? 's' : ''} • ${new Date(session.createdAt).toLocaleDateString()}`;
+      description = `${totalFiles} file${totalFiles !== 1 ? 's' : ''} • ${new Date(session.createdAt).toLocaleDateString()}`;
     }
 
-    this.contextValue = isInProgress ? 'promptSessionInProgress' : 'promptSession';
+    const metaParts: string[] = [];
+    if (session.flagged) {
+      metaParts.push('flagged');
+    }
+    const tagsLabel = formatTagsLabel(session.tags);
+    if (tagsLabel) {
+      metaParts.push(tagsLabel);
+    }
+    if (session.hidden) {
+      metaParts.push('hidden');
+    }
+    if (metaParts.length > 0) {
+      description = `${description} • ${metaParts.join(' • ')}`;
+    }
 
-    // Set icon based on status and mode
+    this.description = description;
+
     if (isInProgress) {
-      this.iconPath = new vscode.ThemeIcon(
-        'sync~spin',
-        new vscode.ThemeColor('terminal.ansiYellow')
-      );
+      this.contextValue = 'promptSessionInProgress';
     } else {
-      this.iconPath = new vscode.ThemeIcon(
-        session.mode === 'oneshot' ? 'terminal' : 'history',
-        session.mode === 'oneshot'
-          ? new vscode.ThemeColor('terminal.ansiGreen')
-          : new vscode.ThemeColor('terminal.ansiBlue')
-      );
+      this.contextValue = session.hidden ? 'promptSessionHidden' : 'promptSession';
     }
 
-    // Make it clickable
+    // Set icon based on mode only
+    this.iconPath = new vscode.ThemeIcon(
+      session.mode === 'oneshot' ? 'terminal' : 'circle-filled',
+      session.mode === 'oneshot'
+        ? new vscode.ThemeColor('terminal.ansiGreen')
+        : new vscode.ThemeColor('terminal.ansiBlue')
+    );
+
+    // Make it clickable to open the webview
     this.command = {
       command: 'promptvc.showSessionDiff',
       title: 'Show Session Diff',
@@ -146,15 +210,33 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
 
   private sessionsFilePath: string | null = null;
   private repoRoot: string | null = null;
+  private showHiddenSessions: boolean = false;
 
   private fileWatcher: vscode.FileSystemWatcher | null = null;
   private currentSessionWatcher: vscode.FileSystemWatcher | null = null;
   private currentSession: PromptSession | null = null;
 
-  constructor() {
+  constructor(private context: vscode.ExtensionContext) {
+    this.showHiddenSessions = this.context.workspaceState.get('promptvc.showHiddenSessions', false);
+    this.updateHiddenContext();
     this.initializeStorage();
     this.setupFileWatcher();
     this.setupCurrentSessionWatcher();
+  }
+
+  private updateHiddenContext(): void {
+    void vscode.commands.executeCommand('setContext', 'promptvc.showHiddenSessions', this.showHiddenSessions);
+  }
+
+  public setShowHiddenSessions(show: boolean): void {
+    if (this.showHiddenSessions === show) {
+      return;
+    }
+
+    this.showHiddenSessions = show;
+    void this.context.workspaceState.update('promptvc.showHiddenSessions', show);
+    this.updateHiddenContext();
+    this.refresh();
   }
 
   /**
@@ -233,29 +315,43 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
         return;
       }
 
+      // Validate and filter prompt changes - ensure all required fields exist
+      const validPromptChanges = perPromptChanges.filter(pc => {
+        return pc.prompt && typeof pc.prompt === 'string' &&
+               pc.diff !== undefined && pc.diff !== null &&
+               pc.files && Array.isArray(pc.files) &&
+               pc.timestamp && pc.hash;
+      });
+
+      if (validPromptChanges.length === 0) {
+        console.warn('PromptVC: No valid prompt changes found in current session');
+        this.currentSession = null;
+        return;
+      }
+
       // Create a temporary session from the current prompts
-      const allPrompts = perPromptChanges.map(pc => pc.prompt).join(' → ');
-      const allFiles = Array.from(new Set(perPromptChanges.flatMap(pc => pc.files)));
-      const combinedDiff = perPromptChanges.map(pc => pc.diff).join('\n\n');
+      const allPrompts = validPromptChanges.map(pc => pc.prompt).join(' → ');
+      const allFiles = Array.from(new Set(validPromptChanges.flatMap(pc => pc.files)));
+      const combinedDiff = validPromptChanges.map(pc => pc.diff || '').join('\n\n');
 
       this.currentSession = {
         id: 'current',
         provider: 'codex',
         repoRoot: this.repoRoot,
         branch: 'current',
-        preHash: perPromptChanges[0].hash,
+        preHash: validPromptChanges[0].hash,
         postHash: null,
         prompt: allPrompts,
-        responseSnippet: `In progress: ${perPromptChanges.length} prompt${perPromptChanges.length !== 1 ? 's' : ''}`,
+        responseSnippet: `In progress: ${validPromptChanges.length} prompt${validPromptChanges.length !== 1 ? 's' : ''}`,
         files: allFiles,
         diff: combinedDiff,
-        createdAt: perPromptChanges[0].timestamp,
+        createdAt: validPromptChanges[0].timestamp,
         mode: 'interactive',
         autoTagged: true,
-        perPromptChanges: perPromptChanges,
+        perPromptChanges: validPromptChanges,
       };
 
-      console.log('PromptVC: Loaded current session with', perPromptChanges.length, 'prompts');
+      console.log('PromptVC: Loaded current session with', validPromptChanges.length, 'prompts');
     } catch (error) {
       console.error('PromptVC: Failed to load current session:', error);
       this.currentSession = null;
@@ -309,6 +405,56 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
   }
 
   /**
+   * Write sessions to JSON file
+   */
+  private writeSessions(sessions: PromptSession[]): boolean {
+    if (!this.sessionsFilePath) {
+      return false;
+    }
+
+    try {
+      fs.writeFileSync(this.sessionsFilePath, JSON.stringify(sessions, null, 2));
+      return true;
+    } catch (error) {
+      console.error('PromptVC: Failed to write sessions:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Update metadata for a stored session
+   */
+  public updateSessionMetadata(sessionId: string, updater: (session: PromptSession) => PromptSession): void {
+    if (sessionId === 'current') {
+      vscode.window.showWarningMessage('PromptVC: Cannot update an in-progress session.');
+      return;
+    }
+
+    this.initializeStorage();
+    if (!this.sessionsFilePath || !fs.existsSync(this.sessionsFilePath)) {
+      vscode.window.showErrorMessage('PromptVC: sessions.json not found.');
+      return;
+    }
+
+    const sessions = this.readSessions();
+    const index = sessions.findIndex(session => session.id === sessionId);
+    if (index === -1) {
+      vscode.window.showWarningMessage(`PromptVC: Session not found: ${sessionId}`);
+      return;
+    }
+
+    const updated = normalizeSessionMetadata(updater({ ...sessions[index] }));
+    sessions[index] = updated;
+
+    if (!this.writeSessions(sessions)) {
+      vscode.window.showErrorMessage('PromptVC: Failed to save session metadata.');
+      return;
+    }
+
+    this.refresh();
+  }
+
+  /**
    * Refresh the tree view
    */
   refresh(): void {
@@ -343,29 +489,22 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
       return Promise.resolve([]);
     }
 
-    // If element is a PromptSessionTreeItem, return its per-prompt changes
+    // If element is a PromptSessionTreeItem, do not show nested changes
     if (element instanceof PromptSessionTreeItem) {
-      const session = element.session;
-      if (session.perPromptChanges && session.perPromptChanges.length > 0) {
-        return Promise.resolve(
-          session.perPromptChanges.map(pc => new PromptChangeTreeItem(pc, session.id))
-        );
-      }
       return Promise.resolve([]);
     }
 
     // No element provided - return root level sessions
     try {
-      const sessions = this.readSessions().slice(0, 50);
+      const sessions = this.readSessions()
+        .filter(session => this.showHiddenSessions || !session.hidden)
+        .slice(0, 50);
       const items: PromptSessionTreeItem[] = [];
 
       // Add current in-progress session at the top if it exists
       if (this.currentSession) {
         console.log('PromptVC: Adding current in-progress session');
-        const collapsibleState = this.currentSession.perPromptChanges && this.currentSession.perPromptChanges.length > 0
-          ? vscode.TreeItemCollapsibleState.Expanded // Auto-expand current session
-          : vscode.TreeItemCollapsibleState.None;
-        items.push(new PromptSessionTreeItem(this.currentSession, collapsibleState, true));
+        items.push(new PromptSessionTreeItem(this.currentSession, vscode.TreeItemCollapsibleState.None, true));
       }
 
       console.log(`PromptVC: Found ${sessions.length} completed sessions to display`);
@@ -381,13 +520,9 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
       }
 
       // Add completed sessions
-      items.push(...sessions.map(session => {
-        // Make session expandable if it has per-prompt changes
-        const collapsibleState = session.perPromptChanges && session.perPromptChanges.length > 0
-          ? vscode.TreeItemCollapsibleState.Collapsed
-          : vscode.TreeItemCollapsibleState.None;
-        return new PromptSessionTreeItem(session, collapsibleState, false);
-      }));
+      items.push(...sessions.map(session => (
+        new PromptSessionTreeItem(session, vscode.TreeItemCollapsibleState.None, false)
+      )));
 
       return Promise.resolve(items);
     } catch (error) {
@@ -416,6 +551,16 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
  */
 async function showPromptDiff(promptChange: PromptChange): Promise<void> {
   try {
+    // Validate prompt change data
+    if (!promptChange.prompt || typeof promptChange.prompt !== 'string') {
+      vscode.window.showErrorMessage('Prompt is missing or invalid');
+      return;
+    }
+    if (!promptChange.diff || typeof promptChange.diff !== 'string') {
+      vscode.window.showErrorMessage('Prompt diff is missing or invalid');
+      return;
+    }
+
     // Create temporary files for the diff
     const tmpDir = path.join(require('os').tmpdir(), 'promptvc');
     if (!fs.existsSync(tmpDir)) {
@@ -460,6 +605,16 @@ async function showPromptDiff(promptChange: PromptChange): Promise<void> {
  */
 async function openDiffInEditor(session: PromptSession): Promise<void> {
   try {
+    // Validate session data
+    if (!session.prompt || typeof session.prompt !== 'string') {
+      vscode.window.showErrorMessage('Session prompt is missing or invalid');
+      return;
+    }
+    if (!session.diff || typeof session.diff !== 'string') {
+      vscode.window.showErrorMessage('Session diff is missing or invalid');
+      return;
+    }
+
     // Create temporary files for the diff
     const tmpDir = path.join(require('os').tmpdir(), 'promptvc');
     if (!fs.existsSync(tmpDir)) {
@@ -502,6 +657,16 @@ async function openDiffInEditor(session: PromptSession): Promise<void> {
  * Show session diff in a webview panel
  */
 function showSessionDiff(session: PromptSession): void {
+  // Validate session data
+  if (!session.prompt || typeof session.prompt !== 'string') {
+    vscode.window.showErrorMessage('Session prompt is missing or invalid');
+    return;
+  }
+  if (!session.diff || typeof session.diff !== 'string') {
+    vscode.window.showErrorMessage('Session diff is missing or invalid');
+    return;
+  }
+
   const panel = vscode.window.createWebviewPanel(
     'promptvcSessionDiff',
     `Session: ${session.prompt.substring(0, 30)}...`,
@@ -548,6 +713,11 @@ interface DiffLine {
   content: string;
   oldLineNumber?: number;
   newLineNumber?: number;
+}
+
+interface SplitRow {
+  left?: DiffLine;
+  right?: DiffLine;
 }
 
 function parseDiff(diffText: string): FileDiff[] {
@@ -650,9 +820,48 @@ function parseDiff(diffText: string): FileDiff[] {
 }
 
 /**
+ * Detect language from file extension
+ */
+function getLanguageFromFilename(filename: string): string {
+  const ext = filename.split('.').pop()?.toLowerCase() || '';
+  const langMap: { [key: string]: string } = {
+    'js': 'javascript',
+    'jsx': 'javascript',
+    'ts': 'typescript',
+    'tsx': 'typescript',
+    'py': 'python',
+    'rb': 'ruby',
+    'java': 'java',
+    'c': 'c',
+    'cpp': 'cpp',
+    'cs': 'csharp',
+    'go': 'go',
+    'rs': 'rust',
+    'php': 'php',
+    'html': 'html',
+    'css': 'css',
+    'scss': 'scss',
+    'json': 'json',
+    'xml': 'xml',
+    'yaml': 'yaml',
+    'yml': 'yaml',
+    'md': 'markdown',
+    'sh': 'bash',
+    'bash': 'bash',
+    'sql': 'sql',
+    'swift': 'swift',
+    'kt': 'kotlin',
+    'r': 'r',
+    'dart': 'dart',
+  };
+  return langMap[ext] || 'plaintext';
+}
+
+/**
  * Generate PR-style diff HTML for a file
  */
-function generateFileDiffHtml(file: FileDiff): string {
+function generateFileDiffHtml(file: FileDiff, index: number): string {
+  const language = getLanguageFromFilename(file.fileName);
   const statsHtml = `
     <span class="diff-stats-additions">+${file.additions}</span>
     <span class="diff-stats-deletions">-${file.deletions}</span>
@@ -674,7 +883,7 @@ function generateFileDiffHtml(file: FileDiff): string {
           <td class="line-number">${oldNum}</td>
           <td class="line-number">${newNum}</td>
           <td class="line-indicator">${indicator}</td>
-          <td class="line-content"><pre>${escapeHtml(line.content)}</pre></td>
+          <td class="line-content"><pre data-language="${language}">${escapeHtml(line.content)}</pre></td>
         </tr>
       `;
     }).join('');
@@ -692,15 +901,113 @@ function generateFileDiffHtml(file: FileDiff): string {
   }).join('');
 
   return `
-    <div class="file-diff">
-      <div class="file-diff-header">
-        <span class="file-name">${escapeHtml(file.fileName)}</span>
-        ${statsHtml}
-      </div>
+    <details class="file-diff" data-file-index="${index}" data-language="${language}" open>
+      <summary class="file-diff-header">
+        <div class="file-header-content">
+          <input type="checkbox" class="viewed-checkbox" data-file-index="${index}" onclick="event.stopPropagation()">
+          <span class="file-name">${escapeHtml(file.fileName)}</span>
+          ${statsHtml}
+        </div>
+      </summary>
       <div class="file-diff-content">
         ${hunksHtml}
       </div>
-    </div>
+    </details>
+  `;
+}
+
+function buildSplitRows(hunk: DiffHunk): SplitRow[] {
+  const rows: SplitRow[] = [];
+  let i = 0;
+
+  while (i < hunk.lines.length) {
+    const line = hunk.lines[i];
+    if (line.type === 'context') {
+      rows.push({ left: line, right: line });
+      i += 1;
+      continue;
+    }
+
+    const deletions: DiffLine[] = [];
+    const additions: DiffLine[] = [];
+    while (i < hunk.lines.length && hunk.lines[i].type !== 'context') {
+      const current = hunk.lines[i];
+      if (current.type === 'deletion') {
+        deletions.push(current);
+      } else if (current.type === 'addition') {
+        additions.push(current);
+      }
+      i += 1;
+    }
+
+    const maxLen = Math.max(deletions.length, additions.length);
+    for (let j = 0; j < maxLen; j++) {
+      rows.push({ left: deletions[j], right: additions[j] });
+    }
+  }
+
+  return rows;
+}
+
+function generateFileDiffSplitHtml(file: FileDiff, index: number): string {
+  const language = getLanguageFromFilename(file.fileName);
+  const statsHtml = `
+    <span class="diff-stats-additions">+${file.additions}</span>
+    <span class="diff-stats-deletions">-${file.deletions}</span>
+  `;
+
+  const hunksHtml = file.hunks.map(hunk => {
+    const rowsHtml = buildSplitRows(hunk).map(row => {
+      const leftType = row.left?.type ?? 'empty';
+      const rightType = row.right?.type ?? 'empty';
+      const leftNum = row.left?.oldLineNumber ?? '';
+      const rightNum = row.right?.newLineNumber ?? '';
+      const leftIndicator = row.left
+        ? (row.left.type === 'deletion' ? '-' : row.left.type === 'addition' ? '+' : ' ')
+        : '';
+      const rightIndicator = row.right
+        ? (row.right.type === 'addition' ? '+' : row.right.type === 'deletion' ? '-' : ' ')
+        : '';
+      const leftContent = row.left ? escapeHtml(row.left.content) : '';
+      const rightContent = row.right ? escapeHtml(row.right.content) : '';
+
+      return `
+        <tr class="split-row">
+          <td class="split-line-number split-left split-${leftType}">${leftNum}</td>
+          <td class="split-line-indicator split-left split-${leftType}">${leftIndicator}</td>
+          <td class="split-line-content split-left split-${leftType}"><pre data-language="${language}">${leftContent}</pre></td>
+          <td class="split-line-number split-right split-${rightType}">${rightNum}</td>
+          <td class="split-line-indicator split-right split-${rightType}">${rightIndicator}</td>
+          <td class="split-line-content split-right split-${rightType}"><pre data-language="${language}">${rightContent}</pre></td>
+        </tr>
+      `;
+    }).join('');
+
+    return `
+      <div class="hunk">
+        <div class="hunk-header">${escapeHtml(hunk.header)}</div>
+        <table class="diff-table diff-table-split">
+          <tbody>
+            ${rowsHtml}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <details class="file-diff file-diff-split" data-file-index="${index}" data-language="${language}" open>
+      <summary class="file-diff-header">
+        <div class="file-header-content">
+          <input type="checkbox" class="viewed-checkbox" data-file-index="${index}" onclick="event.stopPropagation()">
+          <span class="file-name">${escapeHtml(file.fileName)}</span>
+          ${statsHtml}
+        </div>
+      </summary>
+      <div class="file-diff-content">
+        ${hunksHtml}
+      </div>
+    </details>
   `;
 }
 
@@ -719,7 +1026,7 @@ function getWebviewContent(session: PromptSession): string {
           const totalAdditions = parsedPromptDiff.reduce((sum, file) => sum + file.additions, 0);
           const totalDeletions = parsedPromptDiff.reduce((sum, file) => sum + file.deletions, 0);
           const promptDiffHtml = parsedPromptDiff.length > 0
-            ? parsedPromptDiff.map(file => generateFileDiffHtml(file)).join('')
+            ? parsedPromptDiff.map((file, fileIndex) => generateFileDiffHtml(file, fileIndex)).join('')
             : `<div class="no-diff">No changes</div>`;
 
           return `
@@ -758,23 +1065,44 @@ function getWebviewContent(session: PromptSession): string {
   // Parse and generate PR-style diff
   const parsedDiff = parseDiff(session.diff);
   const prDiffHtml = parsedDiff.length > 0
-    ? parsedDiff.map(file => generateFileDiffHtml(file)).join('')
+    ? parsedDiff.map((file, index) => generateFileDiffHtml(file, index)).join('')
     : `<div class="no-diff">No changes to display</div>`;
 
-  return getWebviewContentTemplate(session, filesHtml, perPromptHtml, prDiffHtml);
+  const prDiffSplitHtml = parsedDiff.length > 0
+    ? parsedDiff.map((file, index) => generateFileDiffSplitHtml(file, index)).join('')
+    : `<div class="no-diff">No changes to display</div>`;
+
+  return getWebviewContentTemplate(session, filesHtml, perPromptHtml, prDiffHtml, prDiffSplitHtml);
 }
 
 /**
  * Generate HTML template for the webview
  */
-function getWebviewContentTemplate(session: PromptSession, filesHtml: string, perPromptHtml: string, prDiffHtml: string): string {
+function getWebviewContentTemplate(
+  session: PromptSession,
+  filesHtml: string,
+  perPromptHtml: string,
+  prDiffHtml: string,
+  prDiffSplitHtml: string
+): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PromptVC Session</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/vs2015.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <style>
+        :root {
+            --promptvc-diff-border: var(--vscode-diffEditor-border, var(--vscode-panel-border));
+            --promptvc-diff-unchanged-bg: var(--vscode-diffEditor-unchangedCodeBackground, var(--vscode-editor-background));
+            --promptvc-diff-hunk-bg: var(--vscode-diffEditor-unchangedRegionBackground, var(--vscode-peekViewEditor-background));
+            --promptvc-diff-added-bg: var(--vscode-diffEditor-insertedLineBackground, var(--vscode-diffEditor-insertedTextBackground));
+            --promptvc-diff-removed-bg: var(--vscode-diffEditor-removedLineBackground, var(--vscode-diffEditor-removedTextBackground));
+            --promptvc-diff-added-fg: var(--vscode-gitDecoration-addedResourceForeground);
+            --promptvc-diff-removed-fg: var(--vscode-gitDecoration-deletedResourceForeground);
+        }
         body {
             font-family: var(--vscode-font-family);
             padding: 20px;
@@ -825,6 +1153,30 @@ function getWebviewContentTemplate(session: PromptSession, filesHtml: string, pe
         .diff {
             font-size: 13px;
             line-height: 1.5;
+        }
+        .diff-controls {
+            display: flex;
+            gap: 8px;
+            margin: 10px 0 12px;
+        }
+        .diff-toggle {
+            border: 1px solid var(--vscode-button-border, transparent);
+            background-color: var(--vscode-button-secondaryBackground);
+            color: var(--vscode-button-secondaryForeground);
+            padding: 4px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .diff-toggle.is-active {
+            background-color: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+        }
+        body[data-diff-view="unified"] .diff-split {
+            display: none;
+        }
+        body[data-diff-view="split"] .diff-unified {
+            display: none;
         }
         .prompt-change {
             background-color: var(--vscode-editor-background);
@@ -891,55 +1243,90 @@ function getWebviewContentTemplate(session: PromptSession, filesHtml: string, pe
         /* PR-style diff viewer */
         .file-diff {
             margin: 20px 0;
-            border: 1px solid var(--vscode-panel-border);
+            border: 1px solid var(--promptvc-diff-border);
             border-radius: 6px;
             overflow: hidden;
         }
+        .file-diff[open] {
+            border-bottom: 1px solid var(--promptvc-diff-border);
+        }
+        .file-diff summary {
+            list-style: none;
+            cursor: pointer;
+        }
+        .file-diff summary::-webkit-details-marker {
+            display: none;
+        }
         .file-diff-header {
-            background-color: var(--vscode-editor-background);
+            background-color: var(--vscode-editorGroupHeader-tabsBackground, var(--vscode-editor-background));
             padding: 12px 16px;
-            border-bottom: 1px solid var(--vscode-panel-border);
             display: flex;
             justify-content: space-between;
             align-items: center;
             font-weight: 600;
+            user-select: none;
+        }
+        .file-diff-header:hover {
+            background-color: var(--vscode-list-hoverBackground);
+        }
+        .file-header-content {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex: 1;
+        }
+        .viewed-checkbox {
+            cursor: pointer;
+            width: 16px;
+            height: 16px;
+            margin: 0;
+            flex-shrink: 0;
+        }
+        .file-diff.viewed .file-diff-header {
+            opacity: 0.6;
+        }
+        .file-diff.viewed .file-name {
+            text-decoration: line-through;
+            color: var(--vscode-descriptionForeground);
         }
         .file-name {
             font-family: var(--vscode-editor-font-family);
             font-size: 14px;
+            flex: 1;
         }
         .diff-stats-additions {
-            color: #3fb950;
+            color: var(--promptvc-diff-added-fg);
             font-weight: 600;
             margin-right: 8px;
         }
         .diff-stats-deletions {
-            color: #f85149;
+            color: var(--promptvc-diff-removed-fg);
             font-weight: 600;
         }
         .file-diff-content {
-            background-color: var(--vscode-editor-background);
+            background-color: var(--promptvc-diff-unchanged-bg);
         }
         .hunk {
             margin: 0;
         }
         .hunk-header {
-            background-color: var(--vscode-diffEditor-unchangedRegionBackground);
+            background-color: var(--promptvc-diff-hunk-bg);
             color: var(--vscode-descriptionForeground);
             padding: 6px 12px;
             font-family: var(--vscode-editor-font-family);
-            font-size: 12px;
-            border-top: 1px solid var(--vscode-panel-border);
+            font-size: var(--vscode-editor-font-size, 12px);
+            border-top: 1px solid var(--promptvc-diff-border);
         }
         .diff-table {
             width: 100%;
             border-collapse: collapse;
             font-family: var(--vscode-editor-font-family);
-            font-size: 12px;
+            font-size: var(--vscode-editor-font-size, 12px);
             line-height: 20px;
+            color: var(--vscode-editor-foreground);
         }
         .diff-table tbody {
-            background-color: var(--vscode-editor-background);
+            background-color: var(--promptvc-diff-unchanged-bg);
         }
         .diff-line {
             border: none;
@@ -952,6 +1339,8 @@ function getWebviewContentTemplate(session: PromptSession, filesHtml: string, pe
             user-select: none;
             vertical-align: top;
             font-size: 11px;
+            background-color: var(--vscode-editorGutter-background);
+            border-right: 1px solid var(--promptvc-diff-border);
         }
         .line-indicator {
             width: 20px;
@@ -960,6 +1349,8 @@ function getWebviewContentTemplate(session: PromptSession, filesHtml: string, pe
             user-select: none;
             vertical-align: top;
             font-weight: bold;
+            background-color: var(--vscode-editorGutter-background);
+            border-right: 1px solid var(--promptvc-diff-border);
         }
         .line-content {
             padding: 0;
@@ -972,28 +1363,96 @@ function getWebviewContentTemplate(session: PromptSession, filesHtml: string, pe
             background: transparent;
             border: none;
             font-family: var(--vscode-editor-font-family);
-            font-size: 12px;
+            font-size: var(--vscode-editor-font-size, 12px);
             line-height: 20px;
             white-space: pre-wrap;
             word-wrap: break-word;
+            color: var(--vscode-editor-foreground);
+        }
+        .diff-table-split {
+            width: 100%;
+            border-collapse: collapse;
+            font-family: var(--vscode-editor-font-family);
+            font-size: var(--vscode-editor-font-size, 12px);
+            line-height: 20px;
+            table-layout: fixed;
+            color: var(--vscode-editor-foreground);
+        }
+        .split-line-number {
+            width: 40px;
+            padding: 0 10px;
+            text-align: right;
+            color: var(--vscode-editorLineNumber-foreground);
+            user-select: none;
+            vertical-align: top;
+            font-size: 11px;
+            background-color: var(--vscode-editorGutter-background);
+            border-right: 1px solid var(--promptvc-diff-border);
+        }
+        .split-line-indicator {
+            width: 20px;
+            padding: 0 8px;
+            text-align: center;
+            user-select: none;
+            vertical-align: top;
+            font-weight: bold;
+            background-color: var(--vscode-editorGutter-background);
+            border-right: 1px solid var(--promptvc-diff-border);
+        }
+        .split-line-content {
+            padding: 0;
+            vertical-align: top;
+            width: calc((100% - 120px) / 2);
+        }
+        .split-line-content pre {
+            margin: 0;
+            padding: 0 12px;
+            background: transparent;
+            border: none;
+            font-family: var(--vscode-editor-font-family);
+            font-size: var(--vscode-editor-font-size, 12px);
+            line-height: 20px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            color: var(--vscode-editor-foreground);
+        }
+        .split-addition {
+            background-color: var(--promptvc-diff-added-bg);
+        }
+        .split-deletion {
+            background-color: var(--promptvc-diff-removed-bg);
+        }
+        .split-addition.split-line-indicator {
+            color: var(--promptvc-diff-added-fg);
+        }
+        .split-deletion.split-line-indicator {
+            color: var(--promptvc-diff-removed-fg);
         }
         .diff-line-addition {
-            background-color: rgba(63, 185, 80, 0.15);
+            background-color: var(--promptvc-diff-added-bg);
         }
         .diff-line-addition .line-indicator {
-            color: #3fb950;
+            color: var(--promptvc-diff-added-fg);
+        }
+        .diff-line-addition .line-number,
+        .diff-line-addition .line-indicator {
+            background-color: var(--vscode-editorGutter-addedBackground, var(--promptvc-diff-added-bg));
         }
         .diff-line-addition .line-content {
-            background-color: rgba(63, 185, 80, 0.15);
+            background-color: var(--promptvc-diff-added-bg);
         }
         .diff-line-deletion {
-            background-color: rgba(248, 81, 73, 0.15);
+            background-color: var(--promptvc-diff-removed-bg);
         }
         .diff-line-deletion .line-indicator {
-            color: #f85149;
+            color: var(--promptvc-diff-removed-fg);
+        }
+        .diff-line-deletion .line-number,
+        .diff-line-deletion .line-indicator {
+            background-color: var(--vscode-editorGutter-deletedBackground, var(--promptvc-diff-removed-bg));
         }
         .diff-line-deletion .line-content {
-            background-color: rgba(248, 81, 73, 0.15);
+            background-color: var(--promptvc-diff-removed-bg);
         }
         .diff-line-context {
             background-color: transparent;
@@ -1006,9 +1465,61 @@ function getWebviewContentTemplate(session: PromptSession, filesHtml: string, pe
             text-align: center;
             color: var(--vscode-descriptionForeground);
         }
+
+        /* Syntax highlighting overrides to match VS Code theme */
+        .hljs {
+            background: transparent !important;
+            color: var(--vscode-editor-foreground) !important;
+        }
+        .hljs-keyword,
+        .hljs-selector-tag,
+        .hljs-built_in {
+            color: var(--vscode-symbolIcon-keywordForeground, var(--vscode-debugTokenExpression-name, #569cd6)) !important;
+        }
+        .hljs-string,
+        .hljs-attr,
+        .hljs-attribute {
+            color: var(--vscode-symbolIcon-stringForeground, var(--vscode-debugTokenExpression-string, #ce9178)) !important;
+        }
+        .hljs-number,
+        .hljs-literal {
+            color: var(--vscode-symbolIcon-numberForeground, var(--vscode-debugTokenExpression-number, #b5cea8)) !important;
+        }
+        .hljs-comment {
+            color: var(--vscode-symbolIcon-textForeground, var(--vscode-descriptionForeground, #6a9955)) !important;
+            font-style: italic;
+        }
+        .hljs-function,
+        .hljs-title {
+            color: var(--vscode-symbolIcon-functionForeground, var(--vscode-debugTokenExpression-name, #dcdcaa)) !important;
+        }
+        .hljs-variable,
+        .hljs-name {
+            color: var(--vscode-symbolIcon-variableForeground, var(--vscode-debugTokenExpression-value, #9cdcfe)) !important;
+        }
+        .hljs-class,
+        .hljs-type {
+            color: var(--vscode-symbolIcon-classForeground, var(--vscode-debugTokenExpression-name, #4ec9b0)) !important;
+        }
+        .hljs-tag {
+            color: var(--vscode-symbolIcon-keywordForeground, #569cd6) !important;
+        }
+        .hljs-operator,
+        .hljs-punctuation {
+            color: var(--vscode-editor-foreground) !important;
+        }
+        .hljs-params {
+            color: var(--vscode-symbolIcon-parameterForeground, var(--vscode-debugTokenExpression-name, #9cdcfe)) !important;
+        }
+        .hljs-meta {
+            color: var(--vscode-symbolIcon-keywordForeground, #569cd6) !important;
+        }
+        .hljs-regexp {
+            color: var(--vscode-symbolIcon-stringForeground, #d16969) !important;
+        }
     </style>
 </head>
-<body>
+<body data-diff-view="unified">
     <div class="section">
         <h2>Overall Summary</h2>
         <h3>Prompt</h3>
@@ -1018,13 +1529,125 @@ function getWebviewContentTemplate(session: PromptSession, filesHtml: string, pe
         <ul>${filesHtml}</ul>
 
         <h3>Complete Diff</h3>
-        <div class="pr-diff-viewer">
+        <div class="diff-controls">
+            <button class="diff-toggle is-active" data-view="unified">Unified</button>
+            <button class="diff-toggle" data-view="split">Split</button>
+        </div>
+        <div class="pr-diff-viewer diff-unified">
             ${prDiffHtml}
+        </div>
+        <div class="pr-diff-viewer diff-split">
+            ${prDiffSplitHtml}
         </div>
 
         <h3>Response</h3>
         <pre>${escapeHtml(session.responseSnippet)}</pre>
     </div>
+    <script>
+        const body = document.body;
+        const buttons = document.querySelectorAll('.diff-toggle');
+        const sessionId = '${escapeHtml(session.id)}';
+        const storageKey = \`promptvc-viewed-\${sessionId}\`;
+
+        // Diff view toggle
+        function setView(view) {
+            body.dataset.diffView = view;
+            buttons.forEach(button => {
+                const isActive = button.dataset.view === view;
+                if (isActive) {
+                    button.classList.add('is-active');
+                } else {
+                    button.classList.remove('is-active');
+                }
+            });
+        }
+
+        buttons.forEach(button => {
+            button.addEventListener('click', () => {
+                const view = button.dataset.view || 'unified';
+                setView(view);
+            });
+        });
+
+        // File viewed state management
+        function loadViewedState() {
+            try {
+                const stored = localStorage.getItem(storageKey);
+                return stored ? JSON.parse(stored) : {};
+            } catch (e) {
+                return {};
+            }
+        }
+
+        function saveViewedState(viewedState) {
+            try {
+                localStorage.setItem(storageKey, JSON.stringify(viewedState));
+            } catch (e) {
+                console.error('Failed to save viewed state:', e);
+            }
+        }
+
+        function updateFileViewedState(fileIndex, isViewed) {
+            const viewedState = loadViewedState();
+            viewedState[fileIndex] = isViewed;
+            saveViewedState(viewedState);
+
+            // Update UI
+            const fileDiffs = document.querySelectorAll(\`.file-diff[data-file-index="\${fileIndex}"]\`);
+            fileDiffs.forEach(fileDiff => {
+                if (isViewed) {
+                    fileDiff.classList.add('viewed');
+                } else {
+                    fileDiff.classList.remove('viewed');
+                }
+            });
+        }
+
+        // Initialize viewed state
+        const viewedState = loadViewedState();
+        const checkboxes = document.querySelectorAll('.viewed-checkbox');
+
+        checkboxes.forEach(checkbox => {
+            const fileIndex = checkbox.dataset.fileIndex;
+            const isViewed = viewedState[fileIndex] || false;
+
+            // Set checkbox state
+            checkbox.checked = isViewed;
+
+            // Apply viewed class to file diffs
+            if (isViewed) {
+                const fileDiffs = document.querySelectorAll(\`.file-diff[data-file-index="\${fileIndex}"]\`);
+                fileDiffs.forEach(fileDiff => fileDiff.classList.add('viewed'));
+            }
+
+            // Add event listener
+            checkbox.addEventListener('change', (e) => {
+                updateFileViewedState(fileIndex, e.target.checked);
+            });
+        });
+
+        // Apply syntax highlighting
+        if (typeof hljs !== 'undefined') {
+            document.querySelectorAll('.line-content pre[data-language], .split-line-content pre[data-language]').forEach(block => {
+                const language = block.dataset.language;
+                if (language && language !== 'plaintext') {
+                    try {
+                        const result = hljs.highlight(block.textContent, { language: language, ignoreIllegals: true });
+                        block.innerHTML = result.value;
+                        block.classList.add('hljs');
+                    } catch (e) {
+                        // Fallback to auto-detection
+                        try {
+                            hljs.highlightElement(block);
+                        } catch (e2) {
+                            // If highlighting fails, just keep the plain text
+                            console.warn('Syntax highlighting failed for', language, e2);
+                        }
+                    }
+                }
+            });
+        }
+    </script>
 </body>
 </html>`;
 }
@@ -1037,7 +1660,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   try {
     // Create tree data provider
-    const promptSessionsProvider = new PromptSessionsProvider();
+    const promptSessionsProvider = new PromptSessionsProvider(context);
     console.log('PromptVC: Created tree data provider');
 
     // Register tree view
@@ -1048,14 +1671,16 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Register commands
     context.subscriptions.push(
-      vscode.commands.registerCommand('promptvc.showSessionDiff', (session: PromptSession) => {
+      vscode.commands.registerCommand('promptvc.showSessionDiff', (item: PromptSessionTreeItem | PromptSession) => {
+        const session = item instanceof PromptSessionTreeItem ? item.session : item;
         console.log('PromptVC: Showing session diff', session.id);
         showSessionDiff(session);
       })
     );
 
     context.subscriptions.push(
-      vscode.commands.registerCommand('promptvc.openDiffInEditor', (session: PromptSession) => {
+      vscode.commands.registerCommand('promptvc.openDiffInEditor', (item: PromptSessionTreeItem | PromptSession) => {
+        const session = item instanceof PromptSessionTreeItem ? item.session : item;
         console.log('PromptVC: Opening diff in editor', session.id);
         openDiffInEditor(session);
       })
@@ -1072,6 +1697,76 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.commands.registerCommand('promptvc.refreshSessions', () => {
         console.log('PromptVC: Refreshing sessions');
         promptSessionsProvider.refresh();
+      })
+    );
+
+    context.subscriptions.push(
+      vscode.commands.registerCommand('promptvc.showHiddenSessions', () => {
+        console.log('PromptVC: Showing hidden sessions');
+        promptSessionsProvider.setShowHiddenSessions(true);
+      })
+    );
+
+    context.subscriptions.push(
+      vscode.commands.registerCommand('promptvc.hideHiddenSessions', () => {
+        console.log('PromptVC: Hiding hidden sessions');
+        promptSessionsProvider.setShowHiddenSessions(false);
+      })
+    );
+
+    context.subscriptions.push(
+      vscode.commands.registerCommand('promptvc.hideSession', (item: PromptSessionTreeItem | PromptSession) => {
+        const session = item instanceof PromptSessionTreeItem ? item.session : item;
+        console.log('PromptVC: Hiding session', session.id);
+        promptSessionsProvider.updateSessionMetadata(session.id, existing => ({
+          ...existing,
+          hidden: true,
+        }));
+      })
+    );
+
+    context.subscriptions.push(
+      vscode.commands.registerCommand('promptvc.unhideSession', (item: PromptSessionTreeItem | PromptSession) => {
+        const session = item instanceof PromptSessionTreeItem ? item.session : item;
+        console.log('PromptVC: Unhiding session', session.id);
+        promptSessionsProvider.updateSessionMetadata(session.id, existing => ({
+          ...existing,
+          hidden: false,
+        }));
+      })
+    );
+
+    context.subscriptions.push(
+      vscode.commands.registerCommand('promptvc.toggleSessionFlag', (item: PromptSessionTreeItem | PromptSession) => {
+        const session = item instanceof PromptSessionTreeItem ? item.session : item;
+        console.log('PromptVC: Toggling flag for session', session.id);
+        promptSessionsProvider.updateSessionMetadata(session.id, existing => ({
+          ...existing,
+          flagged: !existing.flagged,
+        }));
+      })
+    );
+
+    context.subscriptions.push(
+      vscode.commands.registerCommand('promptvc.editSessionTags', async (item: PromptSessionTreeItem | PromptSession) => {
+        const session = item instanceof PromptSessionTreeItem ? item.session : item;
+        console.log('PromptVC: Editing tags for session', session.id);
+        const currentTags = session.tags?.join(', ') ?? '';
+        const input = await vscode.window.showInputBox({
+          prompt: 'Enter comma-separated tags for this session',
+          value: currentTags,
+          placeHolder: 'refactor, tests, docs',
+        });
+
+        if (input === undefined) {
+          return;
+        }
+
+        const tags = normalizeTagsInput(input);
+        promptSessionsProvider.updateSessionMetadata(session.id, existing => ({
+          ...existing,
+          tags,
+        }));
       })
     );
 

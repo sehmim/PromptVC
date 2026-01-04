@@ -52,6 +52,36 @@
         "command": "promptvc.refreshSessions",
         "title": "PromptVC: Refresh Sessions",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "promptvc.showHiddenSessions",
+        "title": "Show Hidden Sessions",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "promptvc.hideHiddenSessions",
+        "title": "Hide Hidden Sessions",
+        "icon": "$(eye-closed)"
+      },
+      {
+        "command": "promptvc.hideSession",
+        "title": "Hide Session",
+        "icon": "$(eye-closed)"
+      },
+      {
+        "command": "promptvc.unhideSession",
+        "title": "Unhide Session",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "promptvc.toggleSessionFlag",
+        "title": "Toggle Flag",
+        "icon": "$(flag)"
+      },
+      {
+        "command": "promptvc.editSessionTags",
+        "title": "Edit Tags",
+        "icon": "$(tag)"
       }
     ],
     "menus": {
@@ -60,23 +90,38 @@
           "command": "promptvc.refreshSessions",
           "when": "view == promptvcSessions",
           "group": "navigation"
+        },
+        {
+          "command": "promptvc.showHiddenSessions",
+          "when": "view == promptvcSessions && !promptvc.showHiddenSessions",
+          "group": "navigation"
+        },
+        {
+          "command": "promptvc.hideHiddenSessions",
+          "when": "view == promptvcSessions && promptvc.showHiddenSessions",
+          "group": "navigation"
         }
       ],
       "view/item/context": [
         {
-          "command": "promptvc.openDiffInEditor",
+          "command": "promptvc.hideSession",
           "when": "view == promptvcSessions && viewItem == promptSession",
-          "group": "inline@1"
+          "group": "promptvc@1"
         },
         {
-          "command": "promptvc.showSessionDiff",
-          "when": "view == promptvcSessions && viewItem == promptSession",
-          "group": "inline@2"
+          "command": "promptvc.unhideSession",
+          "when": "view == promptvcSessions && viewItem == promptSessionHidden",
+          "group": "promptvc@1"
         },
         {
-          "command": "promptvc.showPromptDiff",
-          "when": "view == promptvcSessions && viewItem == promptChange",
-          "group": "inline@1"
+          "command": "promptvc.toggleSessionFlag",
+          "when": "view == promptvcSessions && (viewItem == promptSession || viewItem == promptSessionHidden)",
+          "group": "promptvc@2"
+        },
+        {
+          "command": "promptvc.editSessionTags",
+          "when": "view == promptvcSessions && (viewItem == promptSession || viewItem == promptSessionHidden)",
+          "group": "promptvc@3"
         }
       ]
     }
