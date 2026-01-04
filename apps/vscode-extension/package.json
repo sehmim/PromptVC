@@ -15,11 +15,20 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "promptvc",
+          "title": "PromptVC",
+          "icon": "$(git-commit)"
+        }
+      ]
+    },
     "views": {
-      "explorer": [
+      "promptvc": [
         {
           "id": "promptvcSessions",
-          "name": "PromptVC Sessions"
+          "name": "Sessions"
         }
       ]
     },

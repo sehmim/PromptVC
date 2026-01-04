@@ -74,12 +74,18 @@ class PromptChangeTreeItem extends vscode.TreeItem {
 class PromptSessionTreeItem extends vscode.TreeItem {
   constructor(
     public readonly session: PromptSession,
-    public readonly collapsibleState: vscode.TreeItemCollapsibleState
+    public readonly collapsibleState: vscode.TreeItemCollapsibleState,
+    public readonly isInProgress: boolean = false
   ) {
     // Create a more descriptive label
     let label = session.prompt.substring(0, 70);
     if (session.prompt.length > 70) {
       label += '...';
+    }
+
+    // Add "In Progress" prefix for active sessions
+    if (isInProgress) {
+      label = `🔴 ${label}`;
     }
 
     super(label, collapsibleState);
@@ -88,25 +94,35 @@ class PromptSessionTreeItem extends vscode.TreeItem {
     const promptCount = session.perPromptChanges?.length || 1;
     const totalFiles = session.files.length;
     const modeLabel = session.mode === 'oneshot' ? 'One-shot' : 'Interactive';
+    const statusLabel = isInProgress ? ' (IN PROGRESS)' : '';
 
-    this.tooltip = `${session.prompt}\n\nMode: ${modeLabel}\nPrompts: ${promptCount}\nFiles: ${totalFiles}\nDate: ${new Date(session.createdAt).toLocaleString()}`;
+    this.tooltip = `${session.prompt}${statusLabel}\n\nMode: ${modeLabel}\nPrompts: ${promptCount}\nFiles: ${totalFiles}\nDate: ${new Date(session.createdAt).toLocaleString()}`;
 
     // Show prompt count for interactive sessions
-    if (session.perPromptChanges && session.perPromptChanges.length > 0) {
+    if (isInProgress) {
+      this.description = `IN PROGRESS • ${session.perPromptChanges?.length || 0} prompt${(session.perPromptChanges?.length || 0) !== 1 ? 's' : ''}`;
+    } else if (session.perPromptChanges && session.perPromptChanges.length > 0) {
       this.description = `${session.perPromptChanges.length} prompt${session.perPromptChanges.length !== 1 ? 's' : ''} • ${totalFiles} file${totalFiles !== 1 ? 's' : ''}`;
     } else {
       this.description = `${totalFiles} file${totalFiles !== 1 ? 's' : ''} • ${new Date(session.createdAt).toLocaleDateString()}`;
     }
 
-    this.contextValue = 'promptSession';
+    this.contextValue = isInProgress ? 'promptSessionInProgress' : 'promptSession';
 
-    // Set icon based on mode with color
-    this.iconPath = new vscode.ThemeIcon(
-      session.mode === 'oneshot' ? 'terminal' : 'history',
-      session.mode === 'oneshot'
-        ? new vscode.ThemeColor('terminal.ansiGreen')
-        : new vscode.ThemeColor('terminal.ansiBlue')
-    );
+    // Set icon based on status and mode
+    if (isInProgress) {
+      this.iconPath = new vscode.ThemeIcon(
+        'sync~spin',
+        new vscode.ThemeColor('terminal.ansiYellow')
+      );
+    } else {
+      this.iconPath = new vscode.ThemeIcon(
+        session.mode === 'oneshot' ? 'terminal' : 'history',
+        session.mode === 'oneshot'
+          ? new vscode.ThemeColor('terminal.ansiGreen')
+          : new vscode.ThemeColor('terminal.ansiBlue')
+      );
+    }
 
     // Make it clickable
     this.command = {
@@ -132,10 +148,13 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
   private repoRoot: string | null = null;
 
   private fileWatcher: vscode.FileSystemWatcher | null = null;
+  private currentSessionWatcher: vscode.FileSystemWatcher | null = null;
+  private currentSession: PromptSession | null = null;
 
   constructor() {
     this.initializeStorage();
     this.setupFileWatcher();
+    this.setupCurrentSessionWatcher();
   }
 
   /**
@@ -149,13 +168,98 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
 
     this.fileWatcher.onDidChange(() => {
       console.log('PromptVC: Sessions file changed, refreshing...');
+      // Clear current session when a new completed session is saved
+      this.currentSession = null;
       this.refresh();
     });
 
     this.fileWatcher.onDidCreate(() => {
       console.log('PromptVC: Sessions file created, refreshing...');
+      this.currentSession = null;
       this.refresh();
     });
+  }
+
+  /**
+   * Setup watcher for current in-progress session
+   */
+  private setupCurrentSessionWatcher(): void {
+    if (!this.repoRoot) return;
+
+    const currentSessionPath = path.join(this.repoRoot, '.promptvc', 'current_session.json');
+    this.currentSessionWatcher = vscode.workspace.createFileSystemWatcher(currentSessionPath);
+
+    this.currentSessionWatcher.onDidChange(() => {
+      console.log('PromptVC: Current session updated, refreshing...');
+      this.loadCurrentSession();
+      this.refresh();
+    });
+
+    this.currentSessionWatcher.onDidCreate(() => {
+      console.log('PromptVC: Current session created, refreshing...');
+      this.loadCurrentSession();
+      this.refresh();
+    });
+
+    this.currentSessionWatcher.onDidDelete(() => {
+      console.log('PromptVC: Current session deleted');
+      this.currentSession = null;
+      this.refresh();
+    });
+
+    // Load initial current session if it exists
+    this.loadCurrentSession();
+  }
+
+  /**
+   * Load the current in-progress session
+   */
+  private loadCurrentSession(): void {
+    if (!this.repoRoot) return;
+
+    const currentSessionPath = path.join(this.repoRoot, '.promptvc', 'current_session.json');
+
+    if (!fs.existsSync(currentSessionPath)) {
+      this.currentSession = null;
+      return;
+    }
+
+    try {
+      const data = fs.readFileSync(currentSessionPath, 'utf-8');
+      const perPromptChanges = JSON.parse(data) as PromptChange[];
+
+      if (perPromptChanges.length === 0) {
+        this.currentSession = null;
+        return;
+      }
+
+      // Create a temporary session from the current prompts
+      const allPrompts = perPromptChanges.map(pc => pc.prompt).join(' → ');
+      const allFiles = Array.from(new Set(perPromptChanges.flatMap(pc => pc.files)));
+      const combinedDiff = perPromptChanges.map(pc => pc.diff).join('\n\n');
+
+      this.currentSession = {
+        id: 'current',
+        provider: 'codex',
+        repoRoot: this.repoRoot,
+        branch: 'current',
+        preHash: perPromptChanges[0].hash,
+        postHash: null,
+        prompt: allPrompts,
+        responseSnippet: `In progress: ${perPromptChanges.length} prompt${perPromptChanges.length !== 1 ? 's' : ''}`,
+        files: allFiles,
+        diff: combinedDiff,
+        createdAt: perPromptChanges[0].timestamp,
+        mode: 'interactive',
+        autoTagged: true,
+        perPromptChanges: perPromptChanges,
+      };
+
+      console.log('PromptVC: Loaded current session with', perPromptChanges.length, 'prompts');
+    } catch (error) {
+      console.error('PromptVC: Failed to load current session:', error);
+      this.currentSession = null;
+    }
   }
 
   /**
@@ -253,7 +357,18 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
     // No element provided - return root level sessions
     try {
       const sessions = this.readSessions().slice(0, 50);
-      console.log(`PromptVC: Found ${sessions.length} sessions to display`);
+      const items: PromptSessionTreeItem[] = [];
+
+      // Add current in-progress session at the top if it exists
+      if (this.currentSession) {
+        console.log('PromptVC: Adding current in-progress session');
+        const collapsibleState = this.currentSession.perPromptChanges && this.currentSession.perPromptChanges.length > 0
+          ? vscode.TreeItemCollapsibleState.Expanded // Auto-expand current session
+          : vscode.TreeItemCollapsibleState.None;
+        items.push(new PromptSessionTreeItem(this.currentSession, collapsibleState, true));
+      }
+
+      console.log(`PromptVC: Found ${sessions.length} completed sessions to display`);
 
       if (sessions.length > 0) {
         console.log('PromptVC: First session:', {
@@ -265,15 +380,16 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
         });
       }
 
-      return Promise.resolve(
-        sessions.map(session => {
-          // Make session expandable if it has per-prompt changes
-          const collapsibleState = session.perPromptChanges && session.perPromptChanges.length > 0
-            ? vscode.TreeItemCollapsibleState.Collapsed
-            : vscode.TreeItemCollapsibleState.None;
-          return new PromptSessionTreeItem(session, collapsibleState);
-        })
-      );
+      // Add completed sessions
+      items.push(...sessions.map(session => {
+        // Make session expandable if it has per-prompt changes
+        const collapsibleState = session.perPromptChanges && session.perPromptChanges.length > 0
+          ? vscode.TreeItemCollapsibleState.Collapsed
+          : vscode.TreeItemCollapsibleState.None;
+        return new PromptSessionTreeItem(session, collapsibleState, false);
+      }));
+
+      return Promise.resolve(items);
     } catch (error) {
       console.error('Error fetching sessions:', error);
       return Promise.resolve([]);
@@ -287,6 +403,10 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
     if (this.fileWatcher) {
       this.fileWatcher.dispose();
       this.fileWatcher = null;
+    }
+    if (this.currentSessionWatcher) {
+      this.currentSessionWatcher.dispose();
+      this.currentSessionWatcher = null;
     }
   }
 }
@@ -407,6 +527,184 @@ function escapeHtml(text: string): string {
 }
 
 /**
+ * Parse git diff into per-file changes
+ */
+interface FileDiff {
+  fileName: string;
+  oldPath: string;
+  newPath: string;
+  hunks: DiffHunk[];
+  additions: number;
+  deletions: number;
+}
+
+interface DiffHunk {
+  header: string;
+  lines: DiffLine[];
+}
+
+interface DiffLine {
+  type: 'addition' | 'deletion' | 'context' | 'header';
+  content: string;
+  oldLineNumber?: number;
+  newLineNumber?: number;
+}
+
+function parseDiff(diffText: string): FileDiff[] {
+  if (!diffText || diffText.trim() === '') {
+    return [];
+  }
+
+  const files: FileDiff[] = [];
+  const lines = diffText.split('\n');
+  let currentFile: FileDiff | null = null;
+  let currentHunk: DiffHunk | null = null;
+  let oldLineNumber = 0;
+  let newLineNumber = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // File header: diff --git a/... b/...
+    if (line.startsWith('diff --git ')) {
+      if (currentFile && currentHunk) {
+        currentFile.hunks.push(currentHunk);
+      }
+      if (currentFile) {
+        files.push(currentFile);
+      }
+
+      const match = line.match(/diff --git a\/(.*?) b\/(.*?)$/);
+      if (match) {
+        currentFile = {
+          fileName: match[2],
+          oldPath: match[1],
+          newPath: match[2],
+          hunks: [],
+          additions: 0,
+          deletions: 0,
+        };
+        currentHunk = null;
+      }
+    }
+    // Hunk header: @@ -1,5 +1,6 @@
+    else if (line.startsWith('@@')) {
+      if (currentFile && currentHunk) {
+        currentFile.hunks.push(currentHunk);
+      }
+
+      const match = line.match(/@@ -(\d+),?\d* \+(\d+),?\d* @@(.*)/);
+      if (match) {
+        oldLineNumber = parseInt(match[1], 10);
+        newLineNumber = parseInt(match[2], 10);
+        currentHunk = {
+          header: line,
+          lines: [],
+        };
+      }
+    }
+    // Addition
+    else if (line.startsWith('+') && !line.startsWith('+++')) {
+      if (currentHunk && currentFile) {
+        currentHunk.lines.push({
+          type: 'addition',
+          content: line.substring(1),
+          newLineNumber: newLineNumber++,
+        });
+        currentFile.additions++;
+      }
+    }
+    // Deletion
+    else if (line.startsWith('-') && !line.startsWith('---')) {
+      if (currentHunk && currentFile) {
+        currentHunk.lines.push({
+          type: 'deletion',
+          content: line.substring(1),
+          oldLineNumber: oldLineNumber++,
+        });
+        currentFile.deletions++;
+      }
+    }
+    // Context line
+    else if (line.startsWith(' ')) {
+      if (currentHunk) {
+        currentHunk.lines.push({
+          type: 'context',
+          content: line.substring(1),
+          oldLineNumber: oldLineNumber++,
+          newLineNumber: newLineNumber++,
+        });
+      }
+    }
+  }
+
+  // Push last file and hunk
+  if (currentFile && currentHunk) {
+    currentFile.hunks.push(currentHunk);
+  }
+  if (currentFile) {
+    files.push(currentFile);
+  }
+
+  return files;
+}
+
+/**
+ * Generate PR-style diff HTML for a file
+ */
+function generateFileDiffHtml(file: FileDiff): string {
+  const statsHtml = `
+    <span class="diff-stats-additions">+${file.additions}</span>
+    <span class="diff-stats-deletions">-${file.deletions}</span>
+  `;
+
+  const hunksHtml = file.hunks.map(hunk => {
+    const linesHtml = hunk.lines.map(line => {
+      const lineClass = `diff-line diff-line-${line.type}`;
+      const oldNum = line.oldLineNumber !== undefined ? line.oldLineNumber : '';
+      const newNum = line.newLineNumber !== undefined ? line.newLineNumber : '';
+
+      let indicator = '';
+      if (line.type === 'addition') indicator = '+';
+      else if (line.type === 'deletion') indicator = '-';
+      else if (line.type === 'context') indicator = ' ';
+
+      return `
+        <tr class="${lineClass}">
+          <td class="line-number">${oldNum}</td>
+          <td class="line-number">${newNum}</td>
+          <td class="line-indicator">${indicator}</td>
+          <td class="line-content"><pre>${escapeHtml(line.content)}</pre></td>
+        </tr>
+      `;
+    }).join('');
+
+    return `
+      <div class="hunk">
+        <div class="hunk-header">${escapeHtml(hunk.header)}</div>
+        <table class="diff-table">
+          <tbody>
+            ${linesHtml}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="file-diff">
+      <div class="file-diff-header">
+        <span class="file-name">${escapeHtml(file.fileName)}</span>
+        ${statsHtml}
+      </div>
+      <div class="file-diff-content">
+        ${hunksHtml}
+      </div>
+    </div>
+  `;
+}
+
+/**
  * Generate HTML content for the webview
  */
 function getWebviewContent(session: PromptSession): string {
@@ -415,27 +713,35 @@ function getWebviewContent(session: PromptSession): string {
   if (session.perPromptChanges && session.perPromptChanges.length > 0) {
     perPromptHtml = `
       <div class="section">
-        <h2>Per-Prompt Changes (${session.perPromptChanges.length})</h2>
         ${session.perPromptChanges.map((pc, index) => {
           const filesHtml = pc.files.map(f => `<li><code>${escapeHtml(f)}</code></li>`).join('');
-          const addedLines = pc.diff.split('\n').filter(l => l.startsWith('+')).length;
-          const removedLines = pc.diff.split('\n').filter(l => l.startsWith('-')).length;
+          const parsedPromptDiff = parseDiff(pc.diff);
+          const totalAdditions = parsedPromptDiff.reduce((sum, file) => sum + file.additions, 0);
+          const totalDeletions = parsedPromptDiff.reduce((sum, file) => sum + file.deletions, 0);
+          const promptDiffHtml = parsedPromptDiff.length > 0
+            ? parsedPromptDiff.map(file => generateFileDiffHtml(file)).join('')
+            : `<div class="no-diff">No changes</div>`;
 
           return `
             <div class="prompt-change">
               <div class="prompt-header">
                 <span class="prompt-number">#${index + 1}</span>
                 <span class="prompt-time">${new Date(pc.timestamp).toLocaleString()}</span>
-                <span class="diff-stats">+${addedLines} -${removedLines}</span>
+                <span class="diff-stats">
+                  <span class="diff-stats-additions">+${totalAdditions}</span>
+                  <span class="diff-stats-deletions">-${totalDeletions}</span>
+                </span>
               </div>
               <div class="prompt-text">${escapeHtml(pc.prompt)}</div>
               <div class="files-list">
                 <strong>Files (${pc.files.length}):</strong>
                 <ul>${filesHtml}</ul>
               </div>
-              <details>
-                <summary>View Diff</summary>
-                <pre class="diff">${escapeHtml(pc.diff)}</pre>
+              <details open>
+                <summary>View Changes</summary>
+                <div class="pr-diff-viewer">
+                  ${promptDiffHtml}
+                </div>
               </details>
             </div>
           `;
@@ -449,13 +755,19 @@ function getWebviewContent(session: PromptSession): string {
     .map(file => `<li><code>${escapeHtml(file)}</code></li>`)
     .join('');
 
-  return getWebviewContentTemplate(session, filesHtml, perPromptHtml);
+  // Parse and generate PR-style diff
+  const parsedDiff = parseDiff(session.diff);
+  const prDiffHtml = parsedDiff.length > 0
+    ? parsedDiff.map(file => generateFileDiffHtml(file)).join('')
+    : `<div class="no-diff">No changes to display</div>`;
+
+  return getWebviewContentTemplate(session, filesHtml, perPromptHtml, prDiffHtml);
 }
 
 /**
  * Generate HTML template for the webview
  */
-function getWebviewContentTemplate(session: PromptSession, filesHtml: string, perPromptHtml: string): string {
+function getWebviewContentTemplate(session: PromptSession, filesHtml: string, perPromptHtml: string, prDiffHtml: string): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -576,48 +888,142 @@ function getWebviewContentTemplate(session: PromptSession, filesHtml: string, pe
         details[open] summary {
             margin-bottom: 10px;
         }
+        /* PR-style diff viewer */
+        .file-diff {
+            margin: 20px 0;
+            border: 1px solid var(--vscode-panel-border);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        .file-diff-header {
+            background-color: var(--vscode-editor-background);
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--vscode-panel-border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: 600;
+        }
+        .file-name {
+            font-family: var(--vscode-editor-font-family);
+            font-size: 14px;
+        }
+        .diff-stats-additions {
+            color: #3fb950;
+            font-weight: 600;
+            margin-right: 8px;
+        }
+        .diff-stats-deletions {
+            color: #f85149;
+            font-weight: 600;
+        }
+        .file-diff-content {
+            background-color: var(--vscode-editor-background);
+        }
+        .hunk {
+            margin: 0;
+        }
+        .hunk-header {
+            background-color: var(--vscode-diffEditor-unchangedRegionBackground);
+            color: var(--vscode-descriptionForeground);
+            padding: 6px 12px;
+            font-family: var(--vscode-editor-font-family);
+            font-size: 12px;
+            border-top: 1px solid var(--vscode-panel-border);
+        }
+        .diff-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-family: var(--vscode-editor-font-family);
+            font-size: 12px;
+            line-height: 20px;
+        }
+        .diff-table tbody {
+            background-color: var(--vscode-editor-background);
+        }
+        .diff-line {
+            border: none;
+        }
+        .line-number {
+            width: 40px;
+            padding: 0 10px;
+            text-align: right;
+            color: var(--vscode-editorLineNumber-foreground);
+            user-select: none;
+            vertical-align: top;
+            font-size: 11px;
+        }
+        .line-indicator {
+            width: 20px;
+            padding: 0 8px;
+            text-align: center;
+            user-select: none;
+            vertical-align: top;
+            font-weight: bold;
+        }
+        .line-content {
+            padding: 0;
+            vertical-align: top;
+            width: 100%;
+        }
+        .line-content pre {
+            margin: 0;
+            padding: 0 12px;
+            background: transparent;
+            border: none;
+            font-family: var(--vscode-editor-font-family);
+            font-size: 12px;
+            line-height: 20px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .diff-line-addition {
+            background-color: rgba(63, 185, 80, 0.15);
+        }
+        .diff-line-addition .line-indicator {
+            color: #3fb950;
+        }
+        .diff-line-addition .line-content {
+            background-color: rgba(63, 185, 80, 0.15);
+        }
+        .diff-line-deletion {
+            background-color: rgba(248, 81, 73, 0.15);
+        }
+        .diff-line-deletion .line-indicator {
+            color: #f85149;
+        }
+        .diff-line-deletion .line-content {
+            background-color: rgba(248, 81, 73, 0.15);
+        }
+        .diff-line-context {
+            background-color: transparent;
+        }
+        .diff-line-context .line-indicator {
+            color: var(--vscode-descriptionForeground);
+        }
+        .no-diff {
+            padding: 20px;
+            text-align: center;
+            color: var(--vscode-descriptionForeground);
+        }
     </style>
 </head>
 <body>
-    <h1>Prompt Session</h1>
-
-    <div class="section">
-        <div class="metadata">
-            <span class="metadata-label">ID:</span>
-            <span class="metadata-value"><code>${escapeHtml(session.id)}</code></span>
-
-            <span class="metadata-label">Provider:</span>
-            <span class="metadata-value">${escapeHtml(session.provider)}</span>
-
-            <span class="metadata-label">Date:</span>
-            <span class="metadata-value">${new Date(session.createdAt).toLocaleString()}</span>
-
-            <span class="metadata-label">Branch:</span>
-            <span class="metadata-value"><code>${escapeHtml(session.branch)}</code></span>
-
-            <span class="metadata-label">Mode:</span>
-            <span class="metadata-value">${escapeHtml(session.mode)}</span>
-
-            <span class="metadata-label">Commit:</span>
-            <span class="metadata-value"><code>${escapeHtml(session.preHash.substring(0, 7))}</code></span>
-        </div>
-    </div>
-
-    ${perPromptHtml}
-
     <div class="section">
         <h2>Overall Summary</h2>
         <h3>Prompt</h3>
         <pre>${escapeHtml(session.prompt)}</pre>
 
-        <h3>Response</h3>
-        <pre>${escapeHtml(session.responseSnippet)}</pre>
-
         <h3>All Files Changed (${session.files.length})</h3>
         <ul>${filesHtml}</ul>
 
         <h3>Complete Diff</h3>
-        <pre class="diff">${escapeHtml(session.diff)}</pre>
+        <div class="pr-diff-viewer">
+            ${prDiffHtml}
+        </div>
+
+        <h3>Response</h3>
+        <pre>${escapeHtml(session.responseSnippet)}</pre>
     </div>
 </body>
 </html>`;
