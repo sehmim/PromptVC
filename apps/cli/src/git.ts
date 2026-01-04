@@ -106,6 +106,38 @@ export async function isWorkingDirClean(cwd: string = process.cwd()): Promise<bo
 }
 
 /**
+ * Get list of files with uncommitted changes (modified, added, deleted)
+ */
+export async function getUncommittedFiles(cwd: string = process.cwd()): Promise<string[]> {
+  const git: SimpleGit = simpleGit(cwd);
+  try {
+    const status = await git.status();
+    const files = [
+      ...status.modified,
+      ...status.created,
+      ...status.deleted,
+      ...status.renamed.map(r => r.to),
+    ];
+    return files;
+  } catch (error) {
+    throw new Error(`Failed to get uncommitted files: ${error}`);
+  }
+}
+
+/**
+ * Get diff of uncommitted changes
+ */
+export async function getUncommittedDiff(cwd: string = process.cwd()): Promise<string> {
+  const git: SimpleGit = simpleGit(cwd);
+  try {
+    const diff = await git.diff();
+    return diff;
+  } catch (error) {
+    throw new Error(`Failed to get uncommitted diff: ${error}`);
+  }
+}
+
+/**
  * Get short commit hash (7 characters)
  */
 export async function getShortHash(hash: string, cwd: string = process.cwd()): Promise<string> {

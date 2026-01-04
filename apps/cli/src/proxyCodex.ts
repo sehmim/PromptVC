@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import * as path from 'path';
-import { getRepoRoot, getBranch, getHeadHash, getDiff, getChangedFiles } from './git';
+import * as fs from 'fs';
+import { getRepoRoot, getBranch, getHeadHash, getDiff, getChangedFiles, getUncommittedFiles, getUncommittedDiff } from './git';
 import { initDb, insertSession } from './store';
 
 /**
@@ -23,7 +24,7 @@ function truncate(str: string, maxLength: number): string {
  * Extract prompt from command line arguments
  * Looks for the first non-flag argument
  */
-function extractPrompt(args: string[]): string {
+function extractPrompt(args: string[]): string | null {
   for (const arg of args) {
     // Skip flags and their values
     if (arg.startsWith('-')) {
@@ -34,7 +35,68 @@ function extractPrompt(args: string[]): string {
       return arg;
     }
   }
-  return 'interactive session';
+  return null; // Will be filled in later from output or files
+}
+
+/**
+ * Generate a smart prompt description from files changed
+ */
+function generatePromptFromFiles(files: string[]): string {
+  if (files.length === 0) {
+    return 'interactive session';
+  }
+
+  const fileNames = files.map(f => {
+    const parts = f.split('/');
+    return parts[parts.length - 1];
+  }).join(', ');
+
+  return `Modified ${files.length} file${files.length > 1 ? 's' : ''}: ${fileNames}`;
+}
+
+/**
+ * Read prompts from the latest codex session file
+ */
+function readCodexSessionPrompts(): string[] {
+  try {
+    const homeDir = process.env.HOME || process.env.USERPROFILE;
+    if (!homeDir) return [];
+
+    const sessionsDir = path.join(homeDir, '.codex', 'sessions');
+    if (!fs.existsSync(sessionsDir)) return [];
+
+    // Find all rollout-*.jsonl files recursively
+    const findCommand = `find "${sessionsDir}" -name "rollout-*.jsonl" -type f -print0 | xargs -0 ls -t | head -1`;
+    const { execSync } = require('child_process');
+
+    const latestSessionFile = execSync(findCommand, { encoding: 'utf-8' }).trim();
+    if (!latestSessionFile || !fs.existsSync(latestSessionFile)) return [];
+
+    // Read and parse the session file
+    const sessionContent = fs.readFileSync(latestSessionFile, 'utf-8');
+    const lines = sessionContent.split('\n').filter(line => line.trim());
+
+    const prompts: string[] = [];
+    for (const line of lines) {
+      try {
+        const entry = JSON.parse(line);
+        // Extract user messages
+        if (entry.type === 'response_item' &&
+            entry.payload?.role === 'user' &&
+            entry.payload?.content?.[0]?.text) {
+          prompts.push(entry.payload.content[0].text);
+        }
+      } catch (e) {
+        // Skip invalid JSON lines
+        continue;
+      }
+    }
+
+    return prompts;
+  } catch (error) {
+    console.error('[PromptVC] Warning: Failed to read codex session:', error);
+    return [];
+  }
 }
 
 /**
@@ -59,22 +121,13 @@ export async function main(): Promise<void> {
   }
 
   // Extract prompt from args
-  const prompt = extractPrompt(args);
+  let promptFromArgs = extractPrompt(args);
 
-  // Buffer to capture stdout
-  let responseBuffer = '';
-
-  // Spawn the real codex CLI
+  // Spawn the real codex CLI with inherited stdio
+  // This allows codex to detect it's running in a terminal
+  // Note: We can't capture output without breaking TTY detection
   const codexProcess = spawn('codex', args, {
-    stdio: ['inherit', 'pipe', 'inherit'],
-  });
-
-  // Capture stdout
-  codexProcess.stdout.on('data', (data) => {
-    const chunk = data.toString();
-    responseBuffer += chunk;
-    // Also write to our stdout so user sees it
-    process.stdout.write(chunk);
+    stdio: 'inherit',
   });
 
   // Wait for the process to complete
@@ -83,17 +136,70 @@ export async function main(): Promise<void> {
       // Get post-execution git state
       const postHash = await getHeadHash();
 
-      // Check if there were any changes
-      const changedFiles = await getChangedFiles(preHash, 'HEAD');
+      // Check for uncommitted changes first
+      let changedFiles = await getUncommittedFiles();
+      let diff = '';
 
-      if (changedFiles.length === 0) {
-        // No changes, don't log session
-        process.exit(code ?? 0);
-        return;
+      if (changedFiles.length > 0) {
+        // Uncommitted changes exist
+        diff = await getUncommittedDiff();
+      } else {
+        // Check for committed changes
+        changedFiles = await getChangedFiles(preHash, 'HEAD');
+        if (changedFiles.length === 0) {
+          // No changes at all, don't log session
+          process.exit(code ?? 0);
+          return;
+        }
+        // Get the diff for committed changes
+        diff = await getDiff(preHash, 'HEAD');
       }
 
-      // Get the diff
-      const diff = await getDiff(preHash, 'HEAD');
+      // Try to read prompts from notify hook first (faster, real-time)
+      let capturedPrompts: string[] = [];
+
+      if (!promptFromArgs) {
+        const sessionFile = path.join(repoRoot, '.promptvc', 'current_session.json');
+
+        if (fs.existsSync(sessionFile)) {
+          try {
+            const sessionData = JSON.parse(fs.readFileSync(sessionFile, 'utf-8'));
+            if (Array.isArray(sessionData)) {
+              capturedPrompts = sessionData;
+            }
+            // Clean up the session file
+            fs.unlinkSync(sessionFile);
+          } catch (error) {
+            console.error('[PromptVC] Warning: Failed to read session file:', error);
+          }
+        }
+
+        // Fallback: read directly from codex session files if notify hook didn't run
+        if (capturedPrompts.length === 0) {
+          capturedPrompts = readCodexSessionPrompts();
+        }
+      }
+
+      // Determine the final prompt to use
+      let finalPrompt: string;
+      let responseSnippet: string;
+
+      if (promptFromArgs) {
+        // Use the command-line argument (one-shot mode)
+        finalPrompt = promptFromArgs;
+        responseSnippet = `Modified ${changedFiles.length} file(s)`;
+      } else if (capturedPrompts.length > 0) {
+        // Use captured prompts from notification hook (interactive mode)
+        finalPrompt = capturedPrompts.join(' → ');
+        responseSnippet = `Interactive session: ${capturedPrompts.length} prompt${capturedPrompts.length > 1 ? 's' : ''}`;
+      } else {
+        // Fallback: generate from files
+        finalPrompt = generatePromptFromFiles(changedFiles);
+        responseSnippet = `Modified ${changedFiles.length} file(s)`;
+      }
+
+      // Determine mode
+      const mode: 'oneshot' | 'interactive' = promptFromArgs ? 'oneshot' : 'interactive';
 
       // Prepare session data
       const sessionData = {
@@ -102,12 +208,12 @@ export async function main(): Promise<void> {
         branch,
         preHash,
         postHash: preHash !== postHash ? postHash : null,
-        prompt: truncate(prompt, MAX_PROMPT_LENGTH),
-        responseSnippet: truncate(responseBuffer.trim(), MAX_RESPONSE_LENGTH),
+        prompt: truncate(finalPrompt, MAX_PROMPT_LENGTH),
+        responseSnippet,
         files: changedFiles,
         diff,
         createdAt: new Date().toISOString(),
-        mode: 'oneshot' as const,
+        mode,
         autoTagged: true,
       };
 

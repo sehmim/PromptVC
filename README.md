@@ -1,4 +1,4 @@
-# PromptVC
+# Prompt Version Control
 
 Version control for AI prompts - track, version, and visualize your AI-assisted coding sessions.
 

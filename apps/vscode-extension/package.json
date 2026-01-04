@@ -11,7 +11,7 @@
     "Other"
   ],
   "activationEvents": [
-    "onView:promptvcSessions"
+    "onStartupFinished"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -26,7 +26,13 @@
     "commands": [
       {
         "command": "promptvc.showSessionDiff",
-        "title": "PromptVC: Show Session Diff"
+        "title": "Show Diff Summary",
+        "icon": "$(file-code)"
+      },
+      {
+        "command": "promptvc.openDiffInEditor",
+        "title": "Open Diff in Editor",
+        "icon": "$(diff)"
       },
       {
         "command": "promptvc.refreshSessions",
@@ -41,6 +47,18 @@
           "when": "view == promptvcSessions",
           "group": "navigation"
         }
+      ],
+      "view/item/context": [
+        {
+          "command": "promptvc.openDiffInEditor",
+          "when": "view == promptvcSessions && viewItem == promptSession",
+          "group": "inline@1"
+        },
+        {
+          "command": "promptvc.showSessionDiff",
+          "when": "view == promptvcSessions && viewItem == promptSession",
+          "group": "inline@2"
+        }
       ]
     }
   },
@@ -52,11 +70,9 @@
     "package": "vsce package"
   },
   "dependencies": {
-    "@promptvc/types": "workspace:*",
-    "better-sqlite3": "^9.2.2"
+    "@promptvc/types": "workspace:*"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.8",
     "@types/node": "^20.10.6",
     "@types/vscode": "^1.80.0",
     "@vscode/vsce": "^2.22.0",

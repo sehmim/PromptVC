@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import Database from 'better-sqlite3';
 import { PromptSession } from '@promptvc/types';
 
 /**
@@ -42,35 +41,79 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<PromptSessionTre
   readonly onDidChangeTreeData: vscode.Event<PromptSessionTreeItem | undefined | null | void> =
     this._onDidChangeTreeData.event;
 
-  private db: Database.Database | null = null;
+  private sessionsFilePath: string | null = null;
   private repoRoot: string | null = null;
 
+  private fileWatcher: vscode.FileSystemWatcher | null = null;
+
   constructor() {
-    this.initializeDatabase();
+    this.initializeStorage();
+    this.setupFileWatcher();
   }
 
   /**
-   * Initialize database connection
+   * Setup file watcher for live updates
    */
-  private initializeDatabase(): void {
+  private setupFileWatcher(): void {
+    if (!this.repoRoot) return;
+
+    const sessionsPath = path.join(this.repoRoot, '.promptvc', 'sessions.json');
+    this.fileWatcher = vscode.workspace.createFileSystemWatcher(sessionsPath);
+
+    this.fileWatcher.onDidChange(() => {
+      console.log('PromptVC: Sessions file changed, refreshing...');
+      this.refresh();
+    });
+
+    this.fileWatcher.onDidCreate(() => {
+      console.log('PromptVC: Sessions file created, refreshing...');
+      this.refresh();
+    });
+  }
+
+  /**
+   * Initialize JSON storage
+   */
+  private initializeStorage(): void {
     try {
       // Get workspace folder
       const workspaceFolders = vscode.workspace.workspaceFolders;
       if (!workspaceFolders || workspaceFolders.length === 0) {
+        console.log('PromptVC: No workspace folders found');
         return;
       }
 
       this.repoRoot = workspaceFolders[0].uri.fsPath;
-      const dbPath = path.join(this.repoRoot, '.promptvc', 'promptvc.db');
+      console.log('PromptVC: Repo root:', this.repoRoot);
 
-      if (!fs.existsSync(dbPath)) {
-        // Database doesn't exist yet
+      this.sessionsFilePath = path.join(this.repoRoot, '.promptvc', 'sessions.json');
+      console.log('PromptVC: Looking for sessions at:', this.sessionsFilePath);
+
+      if (!fs.existsSync(this.sessionsFilePath)) {
+        console.log('PromptVC: Sessions file does not exist yet');
         return;
       }
 
-      this.db = new Database(dbPath, { readonly: true });
+      console.log('PromptVC: Sessions file found');
     } catch (error) {
-      console.error('Failed to initialize database:', error);
+      console.error('PromptVC: Failed to initialize storage:', error);
+    }
+  }
+
+  /**
+   * Read sessions from JSON file
+   */
+  private readSessions(): PromptSession[] {
+    if (!this.sessionsFilePath || !fs.existsSync(this.sessionsFilePath)) {
+      return [];
+    }
+
+    try {
+      const data = fs.readFileSync(this.sessionsFilePath, 'utf-8');
+      return JSON.parse(data);
+    } catch (error) {
+      console.error('PromptVC: Failed to read sessions:', error);
+      return [];
     }
   }
 
@@ -78,7 +121,7 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<PromptSessionTre
    * Refresh the tree view
    */
   refresh(): void {
-    this.initializeDatabase();
+    this.initializeStorage();
     this._onDidChangeTreeData.fire();
   }
 
@@ -98,34 +141,18 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<PromptSessionTre
       return Promise.resolve([]);
     }
 
-    if (!this.db) {
-      return Promise.resolve([]);
-    }
-
     try {
-      const stmt = this.db.prepare(`
-        SELECT * FROM sessions
-        ORDER BY created_at DESC
-        LIMIT 50
-      `);
+      const sessions = this.readSessions().slice(0, 50);
+      console.log(`PromptVC: Found ${sessions.length} sessions to display`);
 
-      const rows = stmt.all() as any[];
-
-      const sessions: PromptSession[] = rows.map(row => ({
-        id: row.id,
-        provider: row.provider,
-        repoRoot: row.repo_root,
-        branch: row.branch,
-        preHash: row.pre_hash,
-        postHash: row.post_hash,
-        prompt: row.prompt,
-        responseSnippet: row.response_snippet,
-        files: JSON.parse(row.files),
-        diff: row.diff,
-        createdAt: row.created_at,
-        mode: row.mode,
-        autoTagged: row.auto_tagged === 1,
-      }));
+      if (sessions.length > 0) {
+        console.log('PromptVC: First session:', {
+          id: sessions[0].id,
+          provider: sessions[0].provider,
+          prompt: sessions[0].prompt.substring(0, 100),
+          files: sessions[0].files.length
+        });
+      }
 
       return Promise.resolve(
         sessions.map(session => new PromptSessionTreeItem(session, vscode.TreeItemCollapsibleState.None))
@@ -140,10 +167,53 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<PromptSessionTre
    * Clean up resources
    */
   dispose(): void {
-    if (this.db) {
-      this.db.close();
-      this.db = null;
+    if (this.fileWatcher) {
+      this.fileWatcher.dispose();
+      this.fileWatcher = null;
     }
+  }
+}
+
+/**
+ * Open diff in VS Code's native diff editor
+ */
+async function openDiffInEditor(session: PromptSession): Promise<void> {
+  try {
+    // Create temporary files for the diff
+    const tmpDir = path.join(require('os').tmpdir(), 'promptvc');
+    if (!fs.existsSync(tmpDir)) {
+      fs.mkdirSync(tmpDir, { recursive: true });
+    }
+
+    const beforePath = path.join(tmpDir, `${session.id}-before.diff`);
+    const afterPath = path.join(tmpDir, `${session.id}-after.diff`);
+
+    // Write diff to files (split by file if possible, or show full diff)
+    fs.writeFileSync(beforePath, `# Session: ${session.prompt}\n\nNo changes yet`);
+    fs.writeFileSync(afterPath, session.diff);
+
+    // Open in diff editor
+    const beforeUri = vscode.Uri.file(beforePath);
+    const afterUri = vscode.Uri.file(afterPath);
+
+    await vscode.commands.executeCommand(
+      'vscode.diff',
+      beforeUri,
+      afterUri,
+      `PromptVC: ${session.prompt.substring(0, 50)}${session.prompt.length > 50 ? '...' : ''}`
+    );
+
+    // Clean up temp files after a delay
+    setTimeout(() => {
+      try {
+        if (fs.existsSync(beforePath)) fs.unlinkSync(beforePath);
+        if (fs.existsSync(afterPath)) fs.unlinkSync(afterPath);
+      } catch (e) {
+        // Ignore cleanup errors
+      }
+    }, 5000);
+  } catch (error) {
+    vscode.window.showErrorMessage(`Failed to open diff: ${error}`);
   }
 }
 
@@ -295,41 +365,60 @@ function getWebviewContent(session: PromptSession, filesHtml: string): string {
  * Extension activation
  */
 export function activate(context: vscode.ExtensionContext) {
-  console.log('PromptVC extension is now active');
+  console.log('PromptVC extension is now active!');
 
-  // Create tree data provider
-  const promptSessionsProvider = new PromptSessionsProvider();
+  try {
+    // Create tree data provider
+    const promptSessionsProvider = new PromptSessionsProvider();
+    console.log('PromptVC: Created tree data provider');
 
-  // Register tree view
-  const treeView = vscode.window.createTreeView('promptvcSessions', {
-    treeDataProvider: promptSessionsProvider,
-  });
+    // Register tree view
+    const treeView = vscode.window.createTreeView('promptvcSessions', {
+      treeDataProvider: promptSessionsProvider,
+    });
+    console.log('PromptVC: Registered tree view');
 
-  // Register commands
-  context.subscriptions.push(
-    vscode.commands.registerCommand('promptvc.showSessionDiff', (session: PromptSession) => {
-      showSessionDiff(session);
-    })
-  );
+    // Register commands
+    context.subscriptions.push(
+      vscode.commands.registerCommand('promptvc.showSessionDiff', (session: PromptSession) => {
+        console.log('PromptVC: Showing session diff', session.id);
+        showSessionDiff(session);
+      })
+    );
 
-  context.subscriptions.push(
-    vscode.commands.registerCommand('promptvc.refreshSessions', () => {
-      promptSessionsProvider.refresh();
-    })
-  );
+    context.subscriptions.push(
+      vscode.commands.registerCommand('promptvc.openDiffInEditor', (session: PromptSession) => {
+        console.log('PromptVC: Opening diff in editor', session.id);
+        openDiffInEditor(session);
+      })
+    );
 
-  // Watch for workspace changes
-  context.subscriptions.push(
-    vscode.workspace.onDidChangeWorkspaceFolders(() => {
-      promptSessionsProvider.refresh();
-    })
-  );
+    context.subscriptions.push(
+      vscode.commands.registerCommand('promptvc.refreshSessions', () => {
+        console.log('PromptVC: Refreshing sessions');
+        promptSessionsProvider.refresh();
+      })
+    );
 
-  // Clean up
-  context.subscriptions.push(treeView);
-  context.subscriptions.push({
-    dispose: () => promptSessionsProvider.dispose(),
-  });
+    // Watch for workspace changes
+    context.subscriptions.push(
+      vscode.workspace.onDidChangeWorkspaceFolders(() => {
+        console.log('PromptVC: Workspace folders changed');
+        promptSessionsProvider.refresh();
+      })
+    );
+
+    // Clean up
+    context.subscriptions.push(treeView);
+    context.subscriptions.push({
+      dispose: () => promptSessionsProvider.dispose(),
+    });
+
+    console.log('PromptVC: Extension activation complete!');
+  } catch (error) {
+    console.error('PromptVC: Error during activation:', error);
+    vscode.window.showErrorMessage(`PromptVC failed to activate: ${error}`);
+  }
 }
 
 /**
