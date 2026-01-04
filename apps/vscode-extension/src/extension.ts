@@ -1,7 +1,72 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import { PromptSession } from '@promptvc/types';
+import { PromptSession, PromptChange } from '@promptvc/types';
+
+/**
+ * TreeItem representing a file changed in a prompt
+ */
+class FileChangeTreeItem extends vscode.TreeItem {
+  constructor(
+    public readonly fileName: string,
+    public readonly promptChange: PromptChange
+  ) {
+    super(fileName, vscode.TreeItemCollapsibleState.None);
+
+    const filePath = fileName;
+    const extension = filePath.split('.').pop()?.toLowerCase() || '';
+
+    // Set file-specific icon
+    this.iconPath = vscode.ThemeIcon.File;
+    this.resourceUri = vscode.Uri.file(filePath);
+
+    this.tooltip = `${fileName}\n\nChanged in: ${promptChange.prompt.substring(0, 100)}`;
+    this.contextValue = 'fileChange';
+
+    // Make it clickable to view the file diff
+    this.command = {
+      command: 'promptvc.showPromptDiff',
+      title: 'Show File Diff',
+      arguments: [promptChange],
+    };
+  }
+}
+
+/**
+ * TreeItem representing a single prompt change
+ */
+class PromptChangeTreeItem extends vscode.TreeItem {
+  constructor(
+    public readonly promptChange: PromptChange,
+    public readonly sessionId: string
+  ) {
+    const label = `${promptChange.prompt.substring(0, 60)}${promptChange.prompt.length > 60 ? '...' : ''}`;
+
+    // Make it collapsible if there are files
+    const collapsibleState = promptChange.files.length > 0
+      ? vscode.TreeItemCollapsibleState.Collapsed
+      : vscode.TreeItemCollapsibleState.None;
+
+    super(label, collapsibleState);
+
+    // Calculate diff stats
+    const diffLines = promptChange.diff.split('\n').length;
+    const addedLines = promptChange.diff.split('\n').filter(l => l.startsWith('+')).length;
+    const removedLines = promptChange.diff.split('\n').filter(l => l.startsWith('-')).length;
+
+    this.tooltip = `${promptChange.prompt}\n\nFiles: ${promptChange.files.length}\nTime: ${new Date(promptChange.timestamp).toLocaleString()}\n+${addedLines} -${removedLines} lines`;
+    this.description = `${promptChange.files.length} file${promptChange.files.length !== 1 ? 's' : ''} • +${addedLines} -${removedLines}`;
+    this.contextValue = 'promptChange';
+    this.iconPath = new vscode.ThemeIcon('git-commit', new vscode.ThemeColor('gitDecoration.modifiedResourceForeground'));
+
+    // Make it clickable to view the full diff
+    this.command = {
+      command: 'promptvc.showPromptDiff',
+      title: 'Show Prompt Diff',
+      arguments: [promptChange],
+    };
+  }
+}
 
 /**
  * TreeItem representing a prompt session in the tree view
@@ -11,16 +76,36 @@ class PromptSessionTreeItem extends vscode.TreeItem {
     public readonly session: PromptSession,
     public readonly collapsibleState: vscode.TreeItemCollapsibleState
   ) {
-    const label = `[${session.provider}] ${session.prompt.substring(0, 50)}${session.prompt.length > 50 ? '...' : ''}`;
+    // Create a more descriptive label
+    let label = session.prompt.substring(0, 70);
+    if (session.prompt.length > 70) {
+      label += '...';
+    }
+
     super(label, collapsibleState);
 
-    this.tooltip = `${session.prompt}\n\nDate: ${new Date(session.createdAt).toLocaleString()}\nFiles: ${session.files.length}`;
-    this.description = new Date(session.createdAt).toLocaleDateString();
+    // Build rich tooltip
+    const promptCount = session.perPromptChanges?.length || 1;
+    const totalFiles = session.files.length;
+    const modeLabel = session.mode === 'oneshot' ? 'One-shot' : 'Interactive';
+
+    this.tooltip = `${session.prompt}\n\nMode: ${modeLabel}\nPrompts: ${promptCount}\nFiles: ${totalFiles}\nDate: ${new Date(session.createdAt).toLocaleString()}`;
+
+    // Show prompt count for interactive sessions
+    if (session.perPromptChanges && session.perPromptChanges.length > 0) {
+      this.description = `${session.perPromptChanges.length} prompt${session.perPromptChanges.length !== 1 ? 's' : ''} • ${totalFiles} file${totalFiles !== 1 ? 's' : ''}`;
+    } else {
+      this.description = `${totalFiles} file${totalFiles !== 1 ? 's' : ''} • ${new Date(session.createdAt).toLocaleDateString()}`;
+    }
+
     this.contextValue = 'promptSession';
 
-    // Set icon based on mode
+    // Set icon based on mode with color
     this.iconPath = new vscode.ThemeIcon(
-      session.mode === 'oneshot' ? 'terminal' : 'watch'
+      session.mode === 'oneshot' ? 'terminal' : 'history',
+      session.mode === 'oneshot'
+        ? new vscode.ThemeColor('terminal.ansiGreen')
+        : new vscode.ThemeColor('terminal.ansiBlue')
     );
 
     // Make it clickable
@@ -35,10 +120,12 @@ class PromptSessionTreeItem extends vscode.TreeItem {
 /**
  * TreeDataProvider for prompt sessions
  */
-class PromptSessionsProvider implements vscode.TreeDataProvider<PromptSessionTreeItem> {
-  private _onDidChangeTreeData: vscode.EventEmitter<PromptSessionTreeItem | undefined | null | void> =
-    new vscode.EventEmitter<PromptSessionTreeItem | undefined | null | void>();
-  readonly onDidChangeTreeData: vscode.Event<PromptSessionTreeItem | undefined | null | void> =
+type TreeElement = PromptSessionTreeItem | PromptChangeTreeItem | FileChangeTreeItem;
+
+class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
+  private _onDidChangeTreeData: vscode.EventEmitter<TreeElement | undefined | null | void> =
+    new vscode.EventEmitter<TreeElement | undefined | null | void>();
+  readonly onDidChangeTreeData: vscode.Event<TreeElement | undefined | null | void> =
     this._onDidChangeTreeData.event;
 
   private sessionsFilePath: string | null = null;
@@ -126,21 +213,44 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<PromptSessionTre
   }
 
   /**
-   * Get tree item for a session
+   * Get tree item for a session, prompt change, or file
    */
-  getTreeItem(element: PromptSessionTreeItem): vscode.TreeItem {
+  getTreeItem(element: TreeElement): vscode.TreeItem {
     return element;
   }
 
   /**
-   * Get children (sessions) for the tree view
+   * Get children (sessions, per-prompt changes, or files) for the tree view
    */
-  getChildren(element?: PromptSessionTreeItem): Thenable<PromptSessionTreeItem[]> {
-    if (element) {
-      // No nested elements
+  getChildren(element?: TreeElement): Thenable<TreeElement[]> {
+    // If element is a FileChangeTreeItem, it has no children
+    if (element instanceof FileChangeTreeItem) {
       return Promise.resolve([]);
     }
 
+    // If element is a PromptChangeTreeItem, return its files
+    if (element instanceof PromptChangeTreeItem) {
+      const promptChange = element.promptChange;
+      if (promptChange.files.length > 0) {
+        return Promise.resolve(
+          promptChange.files.map(file => new FileChangeTreeItem(file, promptChange))
+        );
+      }
+      return Promise.resolve([]);
+    }
+
+    // If element is a PromptSessionTreeItem, return its per-prompt changes
+    if (element instanceof PromptSessionTreeItem) {
+      const session = element.session;
+      if (session.perPromptChanges && session.perPromptChanges.length > 0) {
+        return Promise.resolve(
+          session.perPromptChanges.map(pc => new PromptChangeTreeItem(pc, session.id))
+        );
+      }
+      return Promise.resolve([]);
+    }
+
+    // No element provided - return root level sessions
     try {
       const sessions = this.readSessions().slice(0, 50);
       console.log(`PromptVC: Found ${sessions.length} sessions to display`);
@@ -150,12 +260,19 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<PromptSessionTre
           id: sessions[0].id,
           provider: sessions[0].provider,
           prompt: sessions[0].prompt.substring(0, 100),
-          files: sessions[0].files.length
+          files: sessions[0].files.length,
+          hasPerPromptChanges: !!sessions[0].perPromptChanges
         });
       }
 
       return Promise.resolve(
-        sessions.map(session => new PromptSessionTreeItem(session, vscode.TreeItemCollapsibleState.None))
+        sessions.map(session => {
+          // Make session expandable if it has per-prompt changes
+          const collapsibleState = session.perPromptChanges && session.perPromptChanges.length > 0
+            ? vscode.TreeItemCollapsibleState.Collapsed
+            : vscode.TreeItemCollapsibleState.None;
+          return new PromptSessionTreeItem(session, collapsibleState);
+        })
       );
     } catch (error) {
       console.error('Error fetching sessions:', error);
@@ -171,6 +288,50 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<PromptSessionTre
       this.fileWatcher.dispose();
       this.fileWatcher = null;
     }
+  }
+}
+
+/**
+ * Show diff for a single prompt change
+ */
+async function showPromptDiff(promptChange: PromptChange): Promise<void> {
+  try {
+    // Create temporary files for the diff
+    const tmpDir = path.join(require('os').tmpdir(), 'promptvc');
+    if (!fs.existsSync(tmpDir)) {
+      fs.mkdirSync(tmpDir, { recursive: true });
+    }
+
+    const timestamp = new Date(promptChange.timestamp).getTime();
+    const beforePath = path.join(tmpDir, `prompt-${timestamp}-before.diff`);
+    const afterPath = path.join(tmpDir, `prompt-${timestamp}-after.diff`);
+
+    // Write diff to files
+    fs.writeFileSync(beforePath, `# Prompt: ${promptChange.prompt}\n\nNo changes yet`);
+    fs.writeFileSync(afterPath, promptChange.diff);
+
+    // Open in diff editor
+    const beforeUri = vscode.Uri.file(beforePath);
+    const afterUri = vscode.Uri.file(afterPath);
+
+    await vscode.commands.executeCommand(
+      'vscode.diff',
+      beforeUri,
+      afterUri,
+      `Prompt: ${promptChange.prompt.substring(0, 50)}${promptChange.prompt.length > 50 ? '...' : ''}`
+    );
+
+    // Clean up temp files after a delay
+    setTimeout(() => {
+      try {
+        if (fs.existsSync(beforePath)) fs.unlinkSync(beforePath);
+        if (fs.existsSync(afterPath)) fs.unlinkSync(afterPath);
+      } catch (e) {
+        // Ignore cleanup errors
+      }
+    }, 5000);
+  } catch (error) {
+    vscode.window.showErrorMessage(`Failed to open prompt diff: ${error}`);
   }
 }
 
@@ -230,11 +391,7 @@ function showSessionDiff(session: PromptSession): void {
     }
   );
 
-  const filesHtml = session.files
-    .map(file => `<li><code>${escapeHtml(file)}</code></li>`)
-    .join('');
-
-  panel.webview.html = getWebviewContent(session, filesHtml);
+  panel.webview.html = getWebviewContent(session);
 }
 
 /**
@@ -252,7 +409,53 @@ function escapeHtml(text: string): string {
 /**
  * Generate HTML content for the webview
  */
-function getWebviewContent(session: PromptSession, filesHtml: string): string {
+function getWebviewContent(session: PromptSession): string {
+  // Generate per-prompt breakdown if available
+  let perPromptHtml = '';
+  if (session.perPromptChanges && session.perPromptChanges.length > 0) {
+    perPromptHtml = `
+      <div class="section">
+        <h2>Per-Prompt Changes (${session.perPromptChanges.length})</h2>
+        ${session.perPromptChanges.map((pc, index) => {
+          const filesHtml = pc.files.map(f => `<li><code>${escapeHtml(f)}</code></li>`).join('');
+          const addedLines = pc.diff.split('\n').filter(l => l.startsWith('+')).length;
+          const removedLines = pc.diff.split('\n').filter(l => l.startsWith('-')).length;
+
+          return `
+            <div class="prompt-change">
+              <div class="prompt-header">
+                <span class="prompt-number">#${index + 1}</span>
+                <span class="prompt-time">${new Date(pc.timestamp).toLocaleString()}</span>
+                <span class="diff-stats">+${addedLines} -${removedLines}</span>
+              </div>
+              <div class="prompt-text">${escapeHtml(pc.prompt)}</div>
+              <div class="files-list">
+                <strong>Files (${pc.files.length}):</strong>
+                <ul>${filesHtml}</ul>
+              </div>
+              <details>
+                <summary>View Diff</summary>
+                <pre class="diff">${escapeHtml(pc.diff)}</pre>
+              </details>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
+  }
+
+  // Overall files list
+  const filesHtml = session.files
+    .map(file => `<li><code>${escapeHtml(file)}</code></li>`)
+    .join('');
+
+  return getWebviewContentTemplate(session, filesHtml, perPromptHtml);
+}
+
+/**
+ * Generate HTML template for the webview
+ */
+function getWebviewContentTemplate(session: PromptSession, filesHtml: string, perPromptHtml: string): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -311,6 +514,68 @@ function getWebviewContent(session: PromptSession, filesHtml: string): string {
             font-size: 13px;
             line-height: 1.5;
         }
+        .prompt-change {
+            background-color: var(--vscode-editor-background);
+            border-left: 3px solid var(--vscode-activityBarBadge-background);
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+        }
+        .prompt-header {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            margin-bottom: 10px;
+            font-size: 0.9em;
+            color: var(--vscode-descriptionForeground);
+        }
+        .prompt-number {
+            background-color: var(--vscode-badge-background);
+            color: var(--vscode-badge-foreground);
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-weight: bold;
+            font-size: 0.85em;
+        }
+        .prompt-time {
+            color: var(--vscode-descriptionForeground);
+        }
+        .diff-stats {
+            font-family: var(--vscode-editor-font-family);
+            font-weight: bold;
+        }
+        .diff-stats {
+            color: var(--vscode-gitDecoration-modifiedResourceForeground);
+        }
+        .prompt-text {
+            font-size: 1.1em;
+            margin: 10px 0;
+            padding: 10px;
+            background-color: var(--vscode-textBlockQuote-background);
+            border-radius: 4px;
+        }
+        .files-list {
+            margin: 10px 0;
+        }
+        .files-list ul {
+            margin-top: 5px;
+        }
+        details {
+            margin-top: 10px;
+            cursor: pointer;
+        }
+        details summary {
+            padding: 8px;
+            background-color: var(--vscode-button-secondaryBackground);
+            border-radius: 4px;
+            user-select: none;
+        }
+        details summary:hover {
+            background-color: var(--vscode-button-secondaryHoverBackground);
+        }
+        details[open] summary {
+            margin-bottom: 10px;
+        }
     </style>
 </head>
 <body>
@@ -338,23 +603,20 @@ function getWebviewContent(session: PromptSession, filesHtml: string): string {
         </div>
     </div>
 
+    ${perPromptHtml}
+
     <div class="section">
-        <h2>Prompt</h2>
+        <h2>Overall Summary</h2>
+        <h3>Prompt</h3>
         <pre>${escapeHtml(session.prompt)}</pre>
-    </div>
 
-    <div class="section">
-        <h2>Response</h2>
+        <h3>Response</h3>
         <pre>${escapeHtml(session.responseSnippet)}</pre>
-    </div>
 
-    <div class="section">
-        <h2>Files Changed (${session.files.length})</h2>
+        <h3>All Files Changed (${session.files.length})</h3>
         <ul>${filesHtml}</ul>
-    </div>
 
-    <div class="section">
-        <h2>Diff</h2>
+        <h3>Complete Diff</h3>
         <pre class="diff">${escapeHtml(session.diff)}</pre>
     </div>
 </body>
@@ -390,6 +652,13 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.commands.registerCommand('promptvc.openDiffInEditor', (session: PromptSession) => {
         console.log('PromptVC: Opening diff in editor', session.id);
         openDiffInEditor(session);
+      })
+    );
+
+    context.subscriptions.push(
+      vscode.commands.registerCommand('promptvc.showPromptDiff', (promptChange: PromptChange) => {
+        console.log('PromptVC: Showing prompt diff', promptChange.prompt.substring(0, 50));
+        showPromptDiff(promptChange);
       })
     );
 

@@ -1,3 +1,14 @@
+/**
+ * Represents changes made by a single prompt within an interactive session
+ */
+export interface PromptChange {
+  prompt: string;
+  timestamp: string;
+  hash: string;
+  files: string[];
+  diff: string;
+}
+
 export interface PromptSession {
   id: string;
   provider: 'codex' | 'claude' | 'gemini' | string;
@@ -12,4 +23,10 @@ export interface PromptSession {
   createdAt: string; // ISO timestamp
   mode: 'oneshot' | 'interactive';
   autoTagged: boolean;
+
+  /**
+   * Per-prompt changes captured during interactive sessions
+   * Only populated for interactive mode when notify hook is enabled
+   */
+  perPromptChanges?: PromptChange[];
 }

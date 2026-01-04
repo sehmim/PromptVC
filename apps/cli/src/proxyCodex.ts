@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { getRepoRoot, getBranch, getHeadHash, getDiff, getChangedFiles, getUncommittedFiles, getUncommittedDiff } from './git';
 import { initDb, insertSession } from './store';
+import { PromptChange } from '@promptvc/types';
 
 /**
  * Maximum length for prompt and response snippets
@@ -55,6 +56,30 @@ function generatePromptFromFiles(files: string[]): string {
 }
 
 /**
+ * Check if a prompt is a system prompt that should be filtered out
+ */
+function isSystemPrompt(prompt: string): boolean {
+  const systemPatterns = [
+    '# AGENTS.md',
+    '<INSTRUCTIONS>',
+    '<environment_context>',
+    '## Skills',
+    'These skills are discovered at startup',
+    'skill-creator:',
+    'skill-installer:',
+  ];
+
+  // Check if prompt starts with or contains system patterns
+  for (const pattern of systemPatterns) {
+    if (prompt.startsWith(pattern) || prompt.includes(pattern)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
  * Read prompts from the latest codex session file
  */
 function readCodexSessionPrompts(): string[] {
@@ -84,7 +109,12 @@ function readCodexSessionPrompts(): string[] {
         if (entry.type === 'response_item' &&
             entry.payload?.role === 'user' &&
             entry.payload?.content?.[0]?.text) {
-          prompts.push(entry.payload.content[0].text);
+          const promptText = entry.payload.content[0].text;
+
+          // Filter out system prompts
+          if (!isSystemPrompt(promptText)) {
+            prompts.push(promptText);
+          }
         }
       } catch (e) {
         // Skip invalid JSON lines
@@ -157,6 +187,7 @@ export async function main(): Promise<void> {
 
       // Try to read prompts from notify hook first (faster, real-time)
       let capturedPrompts: string[] = [];
+      let perPromptChanges: PromptChange[] | undefined;
 
       if (!promptFromArgs) {
         const sessionFile = path.join(repoRoot, '.promptvc', 'current_session.json');
@@ -165,10 +196,23 @@ export async function main(): Promise<void> {
           try {
             const sessionData = JSON.parse(fs.readFileSync(sessionFile, 'utf-8'));
             if (Array.isArray(sessionData)) {
-              capturedPrompts = sessionData;
+              // Check if it's the new format (array of PromptChange objects)
+              if (sessionData.length > 0 && typeof sessionData[0] === 'object' && 'prompt' in sessionData[0]) {
+                // New format: array of PromptChange objects
+                perPromptChanges = sessionData as PromptChange[];
+                capturedPrompts = perPromptChanges.map(pc => pc.prompt);
+              } else {
+                // Old format: array of strings
+                capturedPrompts = sessionData as string[];
+              }
             }
             // Clean up the session file
             fs.unlinkSync(sessionFile);
+            // Also clean up the prompt count file
+            const lastPromptFile = path.join(repoRoot, '.promptvc', 'last_prompt_count');
+            if (fs.existsSync(lastPromptFile)) {
+              fs.unlinkSync(lastPromptFile);
+            }
           } catch (error) {
             console.error('[PromptVC] Warning: Failed to read session file:', error);
           }
@@ -215,6 +259,7 @@ export async function main(): Promise<void> {
         createdAt: new Date().toISOString(),
         mode,
         autoTagged: true,
+        perPromptChanges, // Include per-prompt changes if available
       };
 
       // Initialize DB and insert session

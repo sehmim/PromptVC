@@ -35,6 +35,11 @@
         "icon": "$(diff)"
       },
       {
+        "command": "promptvc.showPromptDiff",
+        "title": "Show Prompt Diff",
+        "icon": "$(git-commit)"
+      },
+      {
         "command": "promptvc.refreshSessions",
         "title": "PromptVC: Refresh Sessions",
         "icon": "$(refresh)"
@@ -58,6 +63,11 @@
           "command": "promptvc.showSessionDiff",
           "when": "view == promptvcSessions && viewItem == promptSession",
           "group": "inline@2"
+        },
+        {
+          "command": "promptvc.showPromptDiff",
+          "when": "view == promptvcSessions && viewItem == promptChange",
+          "group": "inline@1"
         }
       ]
     }
