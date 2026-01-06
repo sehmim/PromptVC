@@ -233,8 +233,9 @@ export async function main(): Promise<void> {
         finalPrompt = promptFromArgs;
         responseSnippet = `Modified ${changedFiles.length} file(s)`;
       } else if (capturedPrompts.length > 0) {
-        // Use captured prompts from notification hook (interactive mode)
-        finalPrompt = capturedPrompts.join(' → ');
+        // Use the latest prompt as the primary (interactive mode)
+        // Full history is in perPromptChanges
+        finalPrompt = capturedPrompts[capturedPrompts.length - 1];
         responseSnippet = `Interactive session: ${capturedPrompts.length} prompt${capturedPrompts.length > 1 ? 's' : ''}`;
       } else {
         // Fallback: generate from files

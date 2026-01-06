@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import { Command } from 'commander';
-import { startWatch } from './watch';
 import { getSessions, initDb, getSessionById } from './store';
 import { getRepoRoot } from './git';
 
@@ -11,13 +10,6 @@ program
   .name('promptvc')
   .description('Version control for AI prompts - track, version, and visualize your AI-assisted coding sessions')
   .version('0.1.0');
-
-program
-  .command('watch')
-  .description('Watch for git changes and automatically log interactive sessions')
-  .action(async () => {
-    await startWatch();
-  });
 
 program
   .command('list')

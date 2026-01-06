@@ -3,11 +3,13 @@
 # This script is called by Codex after each turn completes
 # Captures prompts AND git diffs per-prompt for detailed tracking
 
-# Get the current working directory (git repo)
-REPO_DIR="$PWD"
-
-# Check if we're in a git repository
+# Check if we're in a git repository and resolve the repo root
 if ! git rev-parse --git-dir > /dev/null 2>&1; then
+    exit 0
+fi
+
+REPO_DIR=$(git rev-parse --show-toplevel 2>/dev/null)
+if [ -z "$REPO_DIR" ]; then
     exit 0
 fi
 
@@ -15,10 +17,31 @@ fi
 PROMPTVC_DIR="$REPO_DIR/.promptvc"
 SESSION_FILE="$PROMPTVC_DIR/current_session.json"
 LAST_PROMPT_FILE="$PROMPTVC_DIR/last_prompt_count"
+LAST_SESSION_FILE="$PROMPTVC_DIR/last_session_file"
 TEMP_PROMPTS_FILE="$PROMPTVC_DIR/temp_prompts.json"
 
 # Create .promptvc directory if it doesn't exist
 mkdir -p "$PROMPTVC_DIR"
+
+# Play a notification sound when Codex finishes a response
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+SOUND_PATH="$SCRIPT_DIR/../../../assets/notify.mp3"
+play_notify_sound() {
+    if [ ! -f "$SOUND_PATH" ]; then
+        return
+    fi
+
+    if command -v afplay > /dev/null 2>&1; then
+        afplay "$SOUND_PATH" > /dev/null 2>&1 &
+    elif command -v paplay > /dev/null 2>&1; then
+        paplay "$SOUND_PATH" > /dev/null 2>&1 &
+    elif command -v aplay > /dev/null 2>&1; then
+        aplay "$SOUND_PATH" > /dev/null 2>&1 &
+    elif command -v play > /dev/null 2>&1; then
+        play "$SOUND_PATH" > /dev/null 2>&1 &
+    fi
+}
+trap 'play_notify_sound' EXIT
 
 # Find the latest codex session file
 LATEST_SESSION=$(find "$HOME/.codex/sessions" -name "rollout-*.jsonl" -type f -print0 2>/dev/null | \
@@ -28,10 +51,25 @@ if [ ! -f "$LATEST_SESSION" ]; then
     exit 0
 fi
 
+# Reset prompt counter when a new Codex session file appears
+PREV_SESSION=""
+if [ -f "$LAST_SESSION_FILE" ]; then
+    PREV_SESSION=$(cat "$LAST_SESSION_FILE")
+fi
+if [ "$LATEST_SESSION" != "$PREV_SESSION" ]; then
+    echo "0" > "$LAST_PROMPT_FILE"
+    echo "$LATEST_SESSION" > "$LAST_SESSION_FILE"
+fi
+
+# Ensure jq is available
+if ! command -v jq > /dev/null 2>&1; then
+    exit 0
+fi
+
 # Extract all user prompts as a JSON array
 # This preserves multi-line prompts as single entries
 cat "$LATEST_SESSION" | \
-    jq -s '[.[] | select(.type == "response_item" and .payload.role == "user") | .payload.content[0].text] | map(select(. != null))' \
+    jq -R -s 'split("\n") | map(fromjson? | select(.type == "response_item" and .payload.role == "user") | .payload.content[0].text) | map(select(. != null))' \
     > "$TEMP_PROMPTS_FILE" 2>/dev/null
 
 if [ ! -f "$TEMP_PROMPTS_FILE" ] || [ ! -s "$TEMP_PROMPTS_FILE" ]; then

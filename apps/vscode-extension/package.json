@@ -82,6 +82,16 @@
         "command": "promptvc.editSessionTags",
         "title": "Edit Tags",
         "icon": "$(tag)"
+      },
+      {
+        "command": "promptvc.showSessionView",
+        "title": "Group by Sessions",
+        "icon": "$(group-by-ref-type)"
+      },
+      {
+        "command": "promptvc.showPromptView",
+        "title": "Flat Prompt View",
+        "icon": "$(list-flat)"
       }
     ],
     "menus": {
@@ -99,6 +109,16 @@
         {
           "command": "promptvc.hideHiddenSessions",
           "when": "view == promptvcSessions && promptvc.showHiddenSessions",
+          "group": "navigation"
+        },
+        {
+          "command": "promptvc.showPromptView",
+          "when": "view == promptvcSessions && !promptvc.viewMode || promptvc.viewMode == 'session'",
+          "group": "navigation"
+        },
+        {
+          "command": "promptvc.showSessionView",
+          "when": "view == promptvcSessions && promptvc.viewMode == 'prompt'",
           "group": "navigation"
         }
       ],
