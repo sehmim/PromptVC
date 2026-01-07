@@ -2,13 +2,31 @@
   "name": "promptvc-vscode",
   "displayName": "PromptVC",
   "description": "View and explore AI prompt sessions tracked by PromptVC",
+  "icon": "media/logo.png",
   "version": "0.1.0",
   "publisher": "promptvc",
+  "homepage": "https://v0-prompt-version-control-pi.vercel.app/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sehmim/PromptVC.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sehmim/PromptVC/issues"
+  },
   "engines": {
     "vscode": "^1.80.0"
   },
   "categories": [
     "Other"
+  ],
+  "keywords": [
+    "promptvc",
+    "prompt",
+    "diff",
+    "codex",
+    "ai",
+    "sessions",
+    "review"
   ],
   "activationEvents": [
     "onStartupFinished"
@@ -16,22 +34,22 @@
   "main": "./dist/extension.js",
   "contributes": {
     "viewsContainers": {
-      "activitybar": [
-        {
-          "id": "promptvc",
-          "title": "PromptVC",
-          "icon": "$(git-commit)"
-        }
-      ]
-    },
-    "views": {
-      "promptvc": [
-        {
-          "id": "promptvcSessions",
-          "name": "Sessions"
-        }
-      ]
-    },
+    "activitybar": [
+      {
+        "id": "promptvc",
+        "title": "Vibe Sessions",
+        "icon": "$(git-commit)"
+      }
+    ]
+  },
+  "views": {
+    "promptvc": [
+      {
+        "id": "promptvcSessions",
+        "name": "Vibe Sessions"
+      }
+    ]
+  },
     "commands": [
       {
         "command": "promptvc.showSessionDiff",

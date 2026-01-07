@@ -2,6 +2,8 @@
 
 Local-first, prompt-by-prompt diff tracking for AI coding sessions.
 
+Website: https://v0-prompt-version-control-pi.vercel.app/
+
 PromptVC is a coding AI CLI visualization that records each prompt and shows what changed in your repo after every response, in VS Code and the terminal.
 
 ## Feature 1: VS Code Extension (VS Code Marketplace coming soon)

@@ -171,7 +171,7 @@ class FileChangeTreeItem extends vscode.TreeItem {
     this.command = {
       command: 'promptvc.showPromptDiff',
       title: 'Show File Diff',
-      arguments: [promptChange],
+      arguments: [promptChange, fileName],
     };
   }
 }
@@ -651,7 +651,7 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
 /**
  * Show diff for a single prompt change
  */
-async function showPromptDiff(promptChange: PromptChange): Promise<void> {
+async function showPromptDiff(promptChange: PromptChange, focusFile?: string): Promise<void> {
   try {
     // Validate prompt change data
     if (!promptChange.prompt || typeof promptChange.prompt !== 'string') {
@@ -675,7 +675,7 @@ async function showPromptDiff(promptChange: PromptChange): Promise<void> {
       }
     );
 
-    panel.webview.html = getPromptWebviewContent(promptChange);
+    panel.webview.html = getPromptWebviewContent(promptChange, focusFile);
   } catch (error) {
     vscode.window.showErrorMessage(`Failed to open prompt diff: ${error}`);
   }
@@ -982,7 +982,7 @@ function generateFileDiffHtml(file: FileDiff, index: number): string {
   }).join('');
 
   return `
-    <details class="file-diff" data-file-index="${index}" data-language="${language}" open>
+    <details class="file-diff" data-file-index="${index}" data-language="${language}" data-file-name="${escapeHtml(file.fileName)}" open>
       <summary class="file-diff-header">
         <div class="file-header-content">
           <input type="checkbox" class="viewed-checkbox" data-file-index="${index}" onclick="event.stopPropagation()">
@@ -1077,7 +1077,7 @@ function generateFileDiffSplitHtml(file: FileDiff, index: number): string {
   }).join('');
 
   return `
-    <details class="file-diff file-diff-split" data-file-index="${index}" data-language="${language}" open>
+    <details class="file-diff file-diff-split" data-file-index="${index}" data-language="${language}" data-file-name="${escapeHtml(file.fileName)}" open>
       <summary class="file-diff-header">
         <div class="file-header-content">
           <input type="checkbox" class="viewed-checkbox" data-file-index="${index}" onclick="event.stopPropagation()">
@@ -1095,7 +1095,7 @@ function generateFileDiffSplitHtml(file: FileDiff, index: number): string {
 /**
  * Generate HTML content for a prompt-specific webview
  */
-function getPromptWebviewContent(promptChange: PromptChange): string {
+function getPromptWebviewContent(promptChange: PromptChange, focusFile?: string): string {
   const parsedDiff = parseDiff(promptChange.diff);
   const totalAdditions = parsedDiff.reduce((sum, file) => sum + file.additions, 0);
   const totalDeletions = parsedDiff.reduce((sum, file) => sum + file.deletions, 0);
@@ -1168,7 +1168,7 @@ function getPromptWebviewContent(promptChange: PromptChange): string {
     </div>
   `;
 
-  return getWebviewContentTemplate('PromptVC Prompt', storageKey, bodyHtml);
+  return getWebviewContentTemplate('PromptVC Prompt', storageKey, bodyHtml, focusFile);
 }
 
 /**
@@ -1272,7 +1272,8 @@ function getWebviewContent(session: PromptSession): string {
 function getWebviewContentTemplate(
   title: string,
   storageKey: string,
-  bodyHtml: string
+  bodyHtml: string,
+  focusFile?: string
 ): string {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -1517,6 +1518,12 @@ function getWebviewContentTemplate(
             text-decoration: line-through;
             color: var(--vscode-descriptionForeground);
         }
+        .file-diff.is-focused {
+            box-shadow: 0 0 0 2px var(--vscode-focusBorder);
+        }
+        .file-diff.is-focused .file-diff-header {
+            background-color: var(--vscode-list-focusBackground, var(--vscode-editorGroupHeader-tabsBackground));
+        }
         .file-name {
             font-family: var(--vscode-editor-font-family);
             font-size: 14px;
@@ -1755,6 +1762,7 @@ function getWebviewContentTemplate(
         const body = document.body;
         const buttons = document.querySelectorAll('.diff-toggle');
         const storageKey = '${escapeHtml(storageKey)}';
+        const focusFile = ${JSON.stringify(focusFile ?? '')};
 
         // Diff view toggle
         function setView(view) {
@@ -1854,6 +1862,46 @@ function getWebviewContentTemplate(
                 }
             });
         }
+
+        function normalizePath(value) {
+            return value.replace(/\\\\/g, '/');
+        }
+
+        function focusFileDiff(targetFile) {
+            if (!targetFile) {
+                return;
+            }
+
+            const normalizedTarget = normalizePath(targetFile);
+            let matches = Array.from(document.querySelectorAll('.file-diff'))
+                .filter(el => normalizePath(el.dataset.fileName || '') === normalizedTarget);
+
+            if (matches.length === 0) {
+                const targetBase = normalizedTarget.split('/').pop();
+                matches = Array.from(document.querySelectorAll('.file-diff'))
+                    .filter(el => (el.dataset.fileName || '').split('/').pop() === targetBase);
+            }
+
+            if (matches.length === 0) {
+                return;
+            }
+
+            matches.forEach(el => {
+                el.classList.add('is-focused');
+                el.setAttribute('open', 'true');
+            });
+
+            const view = body.dataset.diffView || 'split';
+            const preferredSelector = view === 'unified' ? '.diff-unified' : '.diff-split';
+            const preferredMatch = matches.find(el => el.closest(preferredSelector));
+            const focusTarget = preferredMatch || matches[0];
+
+            if (focusTarget) {
+                focusTarget.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        }
+
+        focusFileDiff(focusFile);
     </script>
 </body>
 </html>`;
@@ -1918,9 +1966,9 @@ export function activate(context: vscode.ExtensionContext) {
     );
 
     context.subscriptions.push(
-      vscode.commands.registerCommand('promptvc.showPromptDiff', (promptChange: PromptChange) => {
+      vscode.commands.registerCommand('promptvc.showPromptDiff', (promptChange: PromptChange, focusFile?: string) => {
         console.log('PromptVC: Showing prompt diff', promptChange.prompt.substring(0, 50));
-        showPromptDiff(promptChange);
+        showPromptDiff(promptChange, focusFile);
       })
     );
 
