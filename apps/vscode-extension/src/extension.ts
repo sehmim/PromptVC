@@ -36,6 +36,104 @@ function normalizeSessionMetadata(session: PromptSession): PromptSession {
   return normalized;
 }
 
+function parseTimestamp(value?: string): number {
+  if (!value) {
+    return 0;
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function sortPromptChangesNewestFirst(promptChanges: PromptChange[]): PromptChange[] {
+  return promptChanges
+    .map((promptChange, index) => ({
+      promptChange,
+      index,
+      sortTime: parseTimestamp(promptChange.timestamp),
+    }))
+    .sort((a, b) => {
+      if (a.sortTime !== b.sortTime) {
+        return b.sortTime - a.sortTime;
+      }
+      return b.index - a.index;
+    })
+    .map(entry => entry.promptChange);
+}
+
+const PROMPTVC_DIR_NAME = '.promptvc';
+const SETTINGS_FILE_NAME = 'settings.json';
+const NOTIFY_SOUND_SETTING_KEY = 'notifySoundEnabled';
+const DEFAULT_NOTIFY_SOUND_ENABLED = true;
+
+function getRepoRootFromWorkspace(): string | null {
+  const workspaceFolders = vscode.workspace.workspaceFolders;
+  if (!workspaceFolders || workspaceFolders.length === 0) {
+    return null;
+  }
+
+  return workspaceFolders[0].uri.fsPath;
+}
+
+function getSettingsPath(repoRoot: string): string {
+  return path.join(repoRoot, PROMPTVC_DIR_NAME, SETTINGS_FILE_NAME);
+}
+
+function readPromptvcSettings(repoRoot: string): Record<string, unknown> {
+  const settingsPath = getSettingsPath(repoRoot);
+  if (!fs.existsSync(settingsPath)) {
+    return {};
+  }
+
+  try {
+    const data = fs.readFileSync(settingsPath, 'utf-8');
+    const parsed = JSON.parse(data);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch (error) {
+    console.warn('PromptVC: Failed to read settings:', error);
+  }
+
+  return {};
+}
+
+function writePromptvcSettings(repoRoot: string, settings: Record<string, unknown>): boolean {
+  try {
+    const settingsDir = path.join(repoRoot, PROMPTVC_DIR_NAME);
+    if (!fs.existsSync(settingsDir)) {
+      fs.mkdirSync(settingsDir, { recursive: true });
+    }
+
+    const settingsPath = getSettingsPath(repoRoot);
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    return true;
+  } catch (error) {
+    console.error('PromptVC: Failed to write settings:', error);
+    return false;
+  }
+}
+
+function getNotifySoundEnabled(repoRoot: string | null): boolean {
+  if (!repoRoot) {
+    return DEFAULT_NOTIFY_SOUND_ENABLED;
+  }
+
+  const settings = readPromptvcSettings(repoRoot);
+  const value = settings[NOTIFY_SOUND_SETTING_KEY];
+  return typeof value === 'boolean' ? value : DEFAULT_NOTIFY_SOUND_ENABLED;
+}
+
+function setNotifySoundEnabled(repoRoot: string | null, enabled: boolean): boolean {
+  if (!repoRoot) {
+    return false;
+  }
+
+  const settings = readPromptvcSettings(repoRoot);
+  settings[NOTIFY_SOUND_SETTING_KEY] = enabled;
+  return writePromptvcSettings(repoRoot, settings);
+}
+
 function getCodexIconUri(repoRoot: string | null): vscode.Uri | null {
   if (!repoRoot) {
     return null;
@@ -541,7 +639,8 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
     if (element instanceof PromptSessionTreeItem) {
       const promptChanges = element.session.perPromptChanges;
       if (promptChanges && promptChanges.length > 0) {
-        return Promise.resolve(promptChanges.map(pc => new PromptChangeTreeItem(pc, element.session.id)));
+        const orderedPromptChanges = sortPromptChangesNewestFirst(promptChanges);
+        return Promise.resolve(orderedPromptChanges.map(pc => new PromptChangeTreeItem(pc, element.session.id)));
       }
       return Promise.resolve([]);
     }
@@ -554,25 +653,65 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
 
       // PROMPT VIEW MODE: Show flat list of all prompts
       if (this.viewMode === 'prompt') {
-        const allPrompts: PromptChangeTreeItem[] = [];
+        const allPrompts: Array<{
+          promptChange: PromptChange;
+          sessionId: string;
+          sessionOrder: number;
+          promptIndex: number;
+          sortTime: number;
+        }> = [];
+
+        const addPromptChanges = (
+          promptChanges: PromptChange[],
+          sessionId: string,
+          sessionOrder: number,
+          fallbackTime: number
+        ) => {
+          promptChanges.forEach((promptChange, promptIndex) => {
+            const promptTime = parseTimestamp(promptChange.timestamp) || fallbackTime;
+            allPrompts.push({
+              promptChange,
+              sessionId,
+              sessionOrder,
+              promptIndex,
+              sortTime: promptTime,
+            });
+          });
+        };
 
         // Add prompts from current in-progress session
         if (this.currentSession && this.currentSession.perPromptChanges) {
-          allPrompts.push(...this.currentSession.perPromptChanges.map(pc =>
-            new PromptChangeTreeItem(pc, this.currentSession!.id)
-          ));
+          addPromptChanges(
+            this.currentSession.perPromptChanges,
+            this.currentSession.id,
+            -1,
+            parseTimestamp(this.currentSession.createdAt)
+          );
         }
 
         // Add prompts from all completed sessions
-        for (const session of sessions) {
+        sessions.forEach((session, sessionIndex) => {
           if (session.perPromptChanges && session.perPromptChanges.length > 0) {
-            allPrompts.push(...session.perPromptChanges.map(pc =>
-              new PromptChangeTreeItem(pc, session.id)
-            ));
+            addPromptChanges(
+              session.perPromptChanges,
+              session.id,
+              sessionIndex,
+              parseTimestamp(session.createdAt)
+            );
           }
-        }
+        });
 
-        return Promise.resolve(allPrompts);
+        allPrompts.sort((a, b) => {
+          if (a.sortTime !== b.sortTime) {
+            return b.sortTime - a.sortTime;
+          }
+          if (a.sessionOrder !== b.sessionOrder) {
+            return a.sessionOrder - b.sessionOrder;
+          }
+          return b.promptIndex - a.promptIndex;
+        });
+
+        return Promise.resolve(allPrompts.map(item => new PromptChangeTreeItem(item.promptChange, item.sessionId)));
       }
 
       // SESSION VIEW MODE: Show grouped by sessions (default)
@@ -1862,6 +2001,30 @@ export function activate(context: vscode.ExtensionContext) {
     });
     console.log('PromptVC: Registered tree view');
 
+    const updateNotifySoundContext = (): boolean => {
+      const enabled = getNotifySoundEnabled(getRepoRootFromWorkspace());
+      void vscode.commands.executeCommand('setContext', 'promptvc.notifySoundEnabled', enabled);
+      return enabled;
+    };
+
+    const setNotifySound = (enabled: boolean): void => {
+      const repoRoot = getRepoRootFromWorkspace();
+      if (!repoRoot) {
+        vscode.window.showErrorMessage('PromptVC: No workspace folder found.');
+        return;
+      }
+
+      if (!setNotifySoundEnabled(repoRoot, enabled)) {
+        vscode.window.showErrorMessage('PromptVC: Failed to update session sound setting.');
+        return;
+      }
+
+      void vscode.commands.executeCommand('setContext', 'promptvc.notifySoundEnabled', enabled);
+      vscode.window.setStatusBarMessage(`PromptVC: Session sound ${enabled ? 'enabled' : 'disabled'}`, 2000);
+    };
+
+    updateNotifySoundContext();
+
     // Register commands
     context.subscriptions.push(
       vscode.commands.registerCommand('promptvc.showSessionDiff', (item: PromptSessionTreeItem | PromptSession) => {
@@ -1890,6 +2053,20 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.commands.registerCommand('promptvc.refreshSessions', () => {
         console.log('PromptVC: Refreshing sessions');
         promptSessionsProvider.refresh();
+      })
+    );
+
+    context.subscriptions.push(
+      vscode.commands.registerCommand('promptvc.enableNotifySound', () => {
+        console.log('PromptVC: Enabling session sound');
+        setNotifySound(true);
+      })
+    );
+
+    context.subscriptions.push(
+      vscode.commands.registerCommand('promptvc.disableNotifySound', () => {
+        console.log('PromptVC: Disabling session sound');
+        setNotifySound(false);
       })
     );
 
@@ -1982,6 +2159,7 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.workspace.onDidChangeWorkspaceFolders(() => {
         console.log('PromptVC: Workspace folders changed');
         promptSessionsProvider.refresh();
+        updateNotifySoundContext();
       })
     );
 

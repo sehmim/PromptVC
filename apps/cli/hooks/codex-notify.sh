@@ -19,6 +19,7 @@ SESSION_FILE="$PROMPTVC_DIR/current_session.json"
 LAST_PROMPT_FILE="$PROMPTVC_DIR/last_prompt_count"
 LAST_SESSION_FILE="$PROMPTVC_DIR/last_session_file"
 TEMP_PROMPTS_FILE="$PROMPTVC_DIR/temp_prompts.json"
+SETTINGS_FILE="$PROMPTVC_DIR/settings.json"
 
 # Create .promptvc directory if it doesn't exist
 mkdir -p "$PROMPTVC_DIR"
@@ -27,6 +28,18 @@ mkdir -p "$PROMPTVC_DIR"
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SOUND_PATH="$SCRIPT_DIR/../../../assets/notify.mp3"
 play_notify_sound() {
+    if [ -f "$SETTINGS_FILE" ]; then
+        SOUND_SETTING=""
+        if command -v jq > /dev/null 2>&1; then
+            SOUND_SETTING=$(jq -r '.notifySoundEnabled // true' "$SETTINGS_FILE" 2>/dev/null)
+        else
+            SOUND_SETTING=$(sed -nE 's/.*"notifySoundEnabled"[[:space:]]*:[[:space:]]*(true|false).*/\1/p' "$SETTINGS_FILE" | head -1)
+        fi
+        if [ "$SOUND_SETTING" = "false" ]; then
+            return
+        fi
+    fi
+
     if [ ! -f "$SOUND_PATH" ]; then
         return
     fi

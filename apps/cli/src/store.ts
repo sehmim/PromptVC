@@ -4,6 +4,7 @@ import { PromptSession } from '@promptvc/types';
 import { v4 as uuidv4 } from 'uuid';
 
 let sessionsFilePath: string | null = null;
+const DEFAULT_SETTINGS = { notifySoundEnabled: true };
 
 /**
  * Initialize the JSON storage for a given repository
@@ -23,6 +24,31 @@ export function initDb(repoRoot: string): void {
   if (!fs.existsSync(sessionsFilePath)) {
     fs.writeFileSync(sessionsFilePath, JSON.stringify([], null, 2));
   }
+}
+
+/**
+ * Initialize PromptVC storage and default settings for a repository
+ */
+export function initRepoStorage(repoRoot: string): {
+  promptvcDir: string;
+  sessionsFilePath: string;
+  settingsFilePath: string;
+} {
+  initDb(repoRoot);
+
+  const promptvcDir = path.join(repoRoot, '.promptvc');
+  const settingsFilePath = path.join(promptvcDir, 'settings.json');
+  const sessionsPath = path.join(promptvcDir, 'sessions.json');
+
+  if (!fs.existsSync(settingsFilePath)) {
+    fs.writeFileSync(settingsFilePath, JSON.stringify(DEFAULT_SETTINGS, null, 2));
+  }
+
+  return {
+    promptvcDir,
+    sessionsFilePath: sessionsPath,
+    settingsFilePath,
+  };
 }
 
 /**

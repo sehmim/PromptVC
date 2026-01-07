@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { Command } from 'commander';
-import { getSessions, initDb, getSessionById } from './store';
+import { getSessions, initDb, getSessionById, initRepoStorage } from './store';
 import { getRepoRoot } from './git';
 
 const program = new Command();
@@ -10,6 +10,23 @@ program
   .name('promptvc')
   .description('Version control for AI prompts - track, version, and visualize your AI-assisted coding sessions')
   .version('0.1.0');
+
+program
+  .command('init')
+  .description('Initialize PromptVC storage in the current git repository')
+  .action(async () => {
+    try {
+      const repoRoot = await getRepoRoot();
+      const result = initRepoStorage(repoRoot);
+
+      console.log(`Initialized PromptVC in ${result.promptvcDir}`);
+      console.log(`Sessions: ${result.sessionsFilePath}`);
+      console.log(`Settings: ${result.settingsFilePath}`);
+    } catch (error) {
+      console.error('Error:', error);
+      process.exit(1);
+    }
+  });
 
 program
   .command('list')

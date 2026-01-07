@@ -54,6 +54,16 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "promptvc.enableNotifySound",
+        "title": "PromptVC: Enable Session Sound",
+        "icon": "$(bell)"
+      },
+      {
+        "command": "promptvc.disableNotifySound",
+        "title": "PromptVC: Disable Session Sound",
+        "icon": "$(bell-slash)"
+      },
+      {
         "command": "promptvc.showHiddenSessions",
         "title": "Show Hidden Sessions",
         "icon": "$(eye)"
@@ -99,6 +109,16 @@
         {
           "command": "promptvc.refreshSessions",
           "when": "view == promptvcSessions",
+          "group": "navigation"
+        },
+        {
+          "command": "promptvc.disableNotifySound",
+          "when": "view == promptvcSessions && promptvc.notifySoundEnabled",
+          "group": "navigation"
+        },
+        {
+          "command": "promptvc.enableNotifySound",
+          "when": "view == promptvcSessions && !promptvc.notifySoundEnabled",
           "group": "navigation"
         },
         {
