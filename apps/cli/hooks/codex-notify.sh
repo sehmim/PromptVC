@@ -15,7 +15,7 @@ fi
 
 # Get PromptVC directory
 PROMPTVC_DIR="$REPO_DIR/.promptvc"
-SESSION_FILE="$PROMPTVC_DIR/current_session.json"
+SESSIONS_FILE="$PROMPTVC_DIR/sessions.json"
 LAST_PROMPT_FILE="$PROMPTVC_DIR/last_prompt_count"
 LAST_SESSION_FILE="$PROMPTVC_DIR/last_session_file"
 TEMP_PROMPTS_FILE="$PROMPTVC_DIR/temp_prompts.json"
@@ -23,6 +23,10 @@ SETTINGS_FILE="$PROMPTVC_DIR/settings.json"
 
 # Create .promptvc directory if it doesn't exist
 mkdir -p "$PROMPTVC_DIR"
+
+if [ ! -f "$SESSIONS_FILE" ]; then
+    echo "[]" > "$SESSIONS_FILE"
+fi
 
 # Play a notification sound when Codex finishes a response
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -64,19 +68,40 @@ if [ ! -f "$LATEST_SESSION" ]; then
     exit 0
 fi
 
+SESSION_ID=$(basename "$LATEST_SESSION" .jsonl)
+TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+
 # Reset prompt counter when a new Codex session file appears
 PREV_SESSION=""
 if [ -f "$LAST_SESSION_FILE" ]; then
     PREV_SESSION=$(cat "$LAST_SESSION_FILE")
 fi
+NEW_SESSION="false"
 if [ "$LATEST_SESSION" != "$PREV_SESSION" ]; then
     echo "0" > "$LAST_PROMPT_FILE"
     echo "$LATEST_SESSION" > "$LAST_SESSION_FILE"
+    NEW_SESSION="true"
 fi
 
 # Ensure jq is available
 if ! command -v jq > /dev/null 2>&1; then
     exit 0
+fi
+
+SESSIONS_JSON=$(cat "$SESSIONS_FILE" 2>/dev/null || echo "[]")
+if ! echo "$SESSIONS_JSON" | jq -e . > /dev/null 2>&1; then
+    SESSIONS_JSON="[]"
+fi
+
+if [ "$NEW_SESSION" = "true" ] && [ -n "$PREV_SESSION" ]; then
+    PREV_SESSION_ID=$(basename "$PREV_SESSION" .jsonl)
+    if [ -n "$PREV_SESSION_ID" ]; then
+        SESSIONS_JSON=$(echo "$SESSIONS_JSON" | jq \
+            --arg prevId "$PREV_SESSION_ID" \
+            --arg endedAt "$TIMESTAMP" \
+            'map(if .id == $prevId then .inProgress = false | .endedAt = $endedAt else . end)')
+    fi
 fi
 
 # Extract all user prompts as a JSON array
@@ -122,13 +147,6 @@ if [ "$CURRENT_PROMPT_COUNT" -le "$LAST_PROMPT_COUNT" ]; then
     exit 0
 fi
 
-# Initialize or load existing session data
-if [ -f "$SESSION_FILE" ]; then
-    EXISTING_SESSION=$(cat "$SESSION_FILE")
-else
-    EXISTING_SESSION="[]"
-fi
-
 # Get the new prompts (starting from LAST_PROMPT_COUNT)
 NEW_PROMPTS=$(echo "$FILTERED_PROMPTS" | jq ".[$LAST_PROMPT_COUNT:]" 2>/dev/null)
 
@@ -136,7 +154,6 @@ NEW_PROMPTS=$(echo "$FILTERED_PROMPTS" | jq ".[$LAST_PROMPT_COUNT:]" 2>/dev/null
 GIT_HASH=$(git rev-parse HEAD 2>/dev/null || echo "")
 GIT_DIFF=$(git diff 2>/dev/null || echo "")
 CHANGED_FILES_RAW=$(git diff --name-only 2>/dev/null || echo "")
-TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 # Build files array as JSON
 if [ -z "$CHANGED_FILES_RAW" ]; then
@@ -184,10 +201,74 @@ EOF
     NEW_ENTRIES=$(echo "$NEW_ENTRIES" | jq ". + [$PROMPT_ENTRY]" 2>/dev/null)
 done
 
-# Merge with existing session
+LATEST_PROMPT=$(echo "$NEW_PROMPTS" | jq -r '.[-1]' 2>/dev/null)
+if [ -z "$LATEST_PROMPT" ] || [ "$LATEST_PROMPT" = "null" ]; then
+    LATEST_PROMPT=""
+fi
+
+# Update sessions.json with the latest prompt changes
 if [ "$NEW_ENTRIES" != "[]" ]; then
-    UPDATED_SESSION=$(echo "$EXISTING_SESSION" | jq ". + $NEW_ENTRIES" 2>/dev/null)
-    echo "$UPDATED_SESSION" > "$SESSION_FILE"
+    UPDATED_SESSIONS=$(echo "$SESSIONS_JSON" | jq \
+        --arg id "$SESSION_ID" \
+        --arg repoRoot "$REPO_DIR" \
+        --arg branch "$BRANCH" \
+        --arg timestamp "$TIMESTAMP" \
+        --arg prompt "$LATEST_PROMPT" \
+        --arg hash "$GIT_HASH" \
+        --argjson files "$FILES_ARRAY" \
+        --argjson diff "$ESCAPED_DIFF" \
+        --argjson newEntries "$NEW_ENTRIES" \
+        '
+        def merge_files(existing; incoming):
+          reduce incoming[] as $item (existing; if index($item) then . else . + [$item] end);
+        def prompt_count(entries):
+          entries | length;
+        def response_snippet(entries):
+          "Interactive session: " + (prompt_count(entries) | tostring) + " prompt" + (if prompt_count(entries) != 1 then "s" else "" end);
+        def update_session(session):
+          session
+          | .provider = "codex"
+          | .repoRoot = $repoRoot
+          | .branch = $branch
+          | .prompt = $prompt
+          | .diff = $diff
+          | .mode = "interactive"
+          | .autoTagged = true
+          | .inProgress = true
+          | .updatedAt = $timestamp
+          | .files = merge_files((.files // []); $files)
+          | .perPromptChanges = ((.perPromptChanges // []) + $newEntries)
+          | .responseSnippet = response_snippet(.perPromptChanges);
+        if map(.id == $id) | any then
+          map(if .id == $id then
+                update_session(.)
+                | if (.createdAt // "") == "" then .createdAt = $timestamp else . end
+                | if (.preHash // "") == "" then .preHash = $hash else . end
+                | .postHash = (.postHash // null)
+              else . end)
+        else
+          [ {
+              id: $id,
+              provider: "codex",
+              repoRoot: $repoRoot,
+              branch: $branch,
+              preHash: $hash,
+              postHash: null,
+              prompt: $prompt,
+              responseSnippet: response_snippet($newEntries),
+              files: $files,
+              diff: $diff,
+              createdAt: $timestamp,
+              updatedAt: $timestamp,
+              mode: "interactive",
+              autoTagged: true,
+              inProgress: true,
+              perPromptChanges: $newEntries
+            } ] + .
+        end
+        ')
+
+    echo "$UPDATED_SESSIONS" > "$SESSIONS_FILE"
 
     # Update last prompt count
     echo "$CURRENT_PROMPT_COUNT" > "$LAST_PROMPT_FILE"

@@ -21,11 +21,14 @@ export interface PromptSession {
   files: string[];
   diff: string;
   createdAt: string; // ISO timestamp
+  updatedAt?: string; // ISO timestamp
+  endedAt?: string; // ISO timestamp
   mode: 'oneshot' | 'interactive';
   autoTagged: boolean;
   hidden?: boolean;
   flagged?: boolean;
   tags?: string[];
+  inProgress?: boolean;
 
   /**
    * Per-prompt changes captured during interactive sessions

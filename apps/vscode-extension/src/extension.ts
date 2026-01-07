@@ -342,8 +342,6 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
   private viewMode: 'session' | 'prompt' = 'session';
 
   private fileWatcher: vscode.FileSystemWatcher | null = null;
-  private currentSessionWatcher: vscode.FileSystemWatcher | null = null;
-  private currentSession: PromptSession | null = null;
 
   constructor(private context: vscode.ExtensionContext) {
     this.showHiddenSessions = this.context.workspaceState.get('promptvc.showHiddenSessions', false);
@@ -352,7 +350,6 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
     this.updateViewModeContext();
     this.initializeStorage();
     this.setupFileWatcher();
-    this.setupCurrentSessionWatcher();
   }
 
   private updateHiddenContext(): void {
@@ -396,112 +393,13 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
 
     this.fileWatcher.onDidChange(() => {
       console.log('PromptVC: Sessions file changed, refreshing...');
-      // Clear current session when a new completed session is saved
-      this.currentSession = null;
       this.refresh();
     });
 
     this.fileWatcher.onDidCreate(() => {
       console.log('PromptVC: Sessions file created, refreshing...');
-      this.currentSession = null;
       this.refresh();
     });
-  }
-
-  /**
-   * Setup watcher for current in-progress session
-   */
-  private setupCurrentSessionWatcher(): void {
-    if (!this.repoRoot) return;
-
-    const currentSessionPath = path.join(this.repoRoot, '.promptvc', 'current_session.json');
-    this.currentSessionWatcher = vscode.workspace.createFileSystemWatcher(currentSessionPath);
-
-    this.currentSessionWatcher.onDidChange(() => {
-      console.log('PromptVC: Current session updated, refreshing...');
-      this.loadCurrentSession();
-      this.refresh();
-    });
-
-    this.currentSessionWatcher.onDidCreate(() => {
-      console.log('PromptVC: Current session created, refreshing...');
-      this.loadCurrentSession();
-      this.refresh();
-    });
-
-    this.currentSessionWatcher.onDidDelete(() => {
-      console.log('PromptVC: Current session deleted');
-      this.currentSession = null;
-      this.refresh();
-    });
-
-    // Load initial current session if it exists
-    this.loadCurrentSession();
-  }
-
-  /**
-   * Load the current in-progress session
-   */
-  private loadCurrentSession(): void {
-    if (!this.repoRoot) return;
-
-    const currentSessionPath = path.join(this.repoRoot, '.promptvc', 'current_session.json');
-
-    if (!fs.existsSync(currentSessionPath)) {
-      this.currentSession = null;
-      return;
-    }
-
-    try {
-      const data = fs.readFileSync(currentSessionPath, 'utf-8');
-      const perPromptChanges = JSON.parse(data) as PromptChange[];
-
-      if (perPromptChanges.length === 0) {
-        this.currentSession = null;
-        return;
-      }
-
-      // Validate and filter prompt changes - ensure all required fields exist
-      const validPromptChanges = perPromptChanges.filter(pc => {
-        return pc.prompt && typeof pc.prompt === 'string' &&
-               pc.diff !== undefined && pc.diff !== null &&
-               pc.files && Array.isArray(pc.files) &&
-               pc.timestamp && pc.hash;
-      });
-
-      if (validPromptChanges.length === 0) {
-        console.warn('PromptVC: No valid prompt changes found in current session');
-        this.currentSession = null;
-        return;
-      }
-
-      // Create a temporary session from the current prompts
-      const latestPrompt = validPromptChanges[validPromptChanges.length - 1].prompt;
-      const allFiles = Array.from(new Set(validPromptChanges.flatMap(pc => pc.files)));
-      const combinedDiff = validPromptChanges.map(pc => pc.diff || '').join('\n\n');
-
-      this.currentSession = {
-        id: 'current',
-        provider: 'codex',
-        repoRoot: this.repoRoot,
-        branch: 'current',
-        preHash: validPromptChanges[0].hash,
-        postHash: null,
-        prompt: latestPrompt,
-        responseSnippet: `In progress: ${validPromptChanges.length} prompt${validPromptChanges.length !== 1 ? 's' : ''}`,
-        files: allFiles,
-        diff: combinedDiff,
-        createdAt: validPromptChanges[0].timestamp,
-        mode: 'interactive',
-        autoTagged: true,
-        perPromptChanges: validPromptChanges,
-      };
-
-      console.log('PromptVC: Loaded current session with', validPromptChanges.length, 'prompts');
-    } catch (error) {
-      console.error('PromptVC: Failed to load current session:', error);
-      this.currentSession = null;
-    }
   }
 
   /**
@@ -679,16 +577,6 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
           });
         };
 
-        // Add prompts from current in-progress session
-        if (this.currentSession && this.currentSession.perPromptChanges) {
-          addPromptChanges(
-            this.currentSession.perPromptChanges,
-            this.currentSession.id,
-            -1,
-            parseTimestamp(this.currentSession.createdAt)
-          );
-        }
-
         // Add prompts from all completed sessions
         sessions.forEach((session, sessionIndex) => {
           if (session.perPromptChanges && session.perPromptChanges.length > 0) {
@@ -718,15 +606,6 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
       const items: PromptSessionTreeItem[] = [];
       const codexIconUri = getCodexIconUri(this.repoRoot);
 
-      // Add current in-progress session at the top if it exists
-      if (this.currentSession) {
-        console.log('PromptVC: Adding current in-progress session');
-        const collapsibleState = this.currentSession.perPromptChanges && this.currentSession.perPromptChanges.length > 0
-          ? vscode.TreeItemCollapsibleState.Expanded
-          : vscode.TreeItemCollapsibleState.None;
-        items.push(new PromptSessionTreeItem(this.currentSession, collapsibleState, true, codexIconUri));
-      }
-
       console.log(`PromptVC: Found ${sessions.length} completed sessions to display`);
 
       if (sessions.length > 0) {
@@ -746,7 +625,7 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
           session.perPromptChanges && session.perPromptChanges.length > 0
             ? vscode.TreeItemCollapsibleState.Expanded
             : vscode.TreeItemCollapsibleState.None,
-          false,
+          session.inProgress === true,
           codexIconUri
         )
       )));
@@ -765,10 +644,6 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
     if (this.fileWatcher) {
       this.fileWatcher.dispose();
       this.fileWatcher = null;
-    }
-    if (this.currentSessionWatcher) {
-      this.currentSessionWatcher.dispose();
-      this.currentSessionWatcher = null;
     }
   }
 }

@@ -27,6 +27,8 @@ Requirements:
 - Node.js 18+ and pnpm
 - VS Code 1.80+
 - Codex CLI
+- jq (required for per-prompt capture)
+- macOS/Linux (Windows: use WSL or Git Bash)
 
 1) Clone and install dependencies:
 ```bash
@@ -46,17 +48,7 @@ cd apps/cli
 pnpm link --global
 ```
 
-4) Make PromptVC wrap `codex` (so sessions are recorded):
-```bash
-BIN_DIR="$(dirname "$(which promptvc-codex)")"
-cat > "$BIN_DIR/codex" <<'EOF'
-#!/usr/bin/env bash
-exec promptvc-codex "$@"
-EOF
-chmod +x "$BIN_DIR/codex"
-```
-
-5) Enable the per-prompt notify hook:
+4) Enable the per-prompt notify hook (no wrapper required):
 Add to `~/.codex/config.toml`:
 ```toml
 [hooks]
@@ -64,14 +56,14 @@ notify = "/absolute/path/to/PromptVC/apps/cli/hooks/codex-notify.sh"
 ```
 Tip: run `pwd` inside the PromptVC repo to get the absolute path.
 
-6) Initialize a repo you want to track:
+5) Initialize a repo you want to track:
 ```bash
 cd /path/to/your/repo
 promptvc init
 ```
 This creates `.promptvc/` inside that repo with `sessions.json` and `settings.json`. Run this once per repo you want to track.
 
-7) Install the VS Code extension from the repo:
+6) Install the VS Code extension from the repo:
 ```bash
 cd apps/vscode-extension
 pnpm run package
@@ -80,19 +72,15 @@ code --install-extension promptvc-vscode-0.1.0.vsix
 If the `code` command is not available, open VS Code and use:
 `Cmd/Ctrl + Shift + P` -> "Extensions: Install from VSIX..."
 
-8) Open the repo in VS Code and reload:
+7) Open the repo in VS Code and reload:
 - `Cmd/Ctrl + Shift + P` -> "Reload Window"
 - Open the PromptVC sidebar (circle icon)
-- The extension reads `.promptvc` from the folder you opened
+- The extension reads `.promptvc/sessions.json` from the folder you opened
 
-9) Run Codex in that repo to generate sessions:
+8) Run Codex in that repo to generate sessions:
 ```bash
 codex
 ```
-
-7) Open a git repo in VS Code and reload:
-- `Cmd/Ctrl + Shift + P` -> "Reload Window"
-- Open the PromptVC sidebar (circle icon)
 
 ## Usage (interactive mode)
 
