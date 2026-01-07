@@ -56,31 +56,29 @@ notify = "/absolute/path/to/PromptVC/apps/cli/hooks/codex-notify.sh"
 ```
 Tip: run `pwd` inside the PromptVC repo to get the absolute path.
 
-5) Initialize a repo you want to track:
+
+## Workflow (daily usage)
+
+1) Launch the debug build of the extension (from `apps/vscode-extension`):
+- In VS Code: `Run -> Start Debugging -> npm build`
+- This opens a new Extension Development Host window
+
+2) In the Extension Development Host window, open the repo you want to track.
+
+3) Initialize PromptVC in that repo:
 ```bash
 cd /path/to/your/repo
 promptvc init
 ```
 This creates `.promptvc/` inside that repo with `sessions.json` and `settings.json`. Run this once per repo you want to track.
 
-6) Install the VS Code extension from the repo:
-```bash
-cd apps/vscode-extension
-pnpm run package
-code --install-extension promptvc-vscode-0.1.0.vsix
-```
-If the `code` command is not available, open VS Code and use:
-`Cmd/Ctrl + Shift + P` -> "Extensions: Install from VSIX..."
-
-7) Open the repo in VS Code and reload:
-- `Cmd/Ctrl + Shift + P` -> "Reload Window"
-- Open the PromptVC sidebar (circle icon)
-- The extension reads `.promptvc/sessions.json` from the folder you opened
-
-8) Run Codex in that repo to generate sessions:
+4) Start coding with Codex in that repo:
 ```bash
 codex
 ```
+
+5) Each prompt you run shows up in the PromptVC Sessions view:
+<img src="assets/extension-demo.png" alt="PromptVC VS Code extension showing prompt-by-prompt diffs" width="3018" height="1772" />
 
 ## Usage (interactive mode)
 
