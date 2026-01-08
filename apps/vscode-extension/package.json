@@ -1,10 +1,11 @@
 {
   "name": "promptvc-vscode",
-  "displayName": "PromptVC",
+  "displayName": "Prompt Version Control",
   "description": "View and explore AI prompt sessions tracked by PromptVC",
   "icon": "media/logo.png",
-  "version": "0.1.0",
-  "publisher": "promptvc",
+  "version": "0.1.1",
+  "publisher": "SehmimHaque",
+  "license": "MIT",
   "homepage": "https://v0-prompt-version-control-pi.vercel.app/",
   "repository": {
     "type": "git",
@@ -50,6 +51,13 @@
       }
     ]
   },
+    "viewsWelcome": [
+      {
+        "view": "promptvcSessions",
+        "when": "!promptvc.hasInit",
+        "contents": "### Getting started\n1. Install the CLI: `npm install -g promptvc`\n2. Configure the Codex hook: `promptvc config`\n3. Initialize this repo: `promptvc init`\n\nOnce initialized, run Codex to capture sessions."
+      }
+    ],
     "commands": [
       {
         "command": "promptvc.showSessionDiff",
@@ -185,7 +193,7 @@
     }
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-media.js",
     "clean": "rm -rf dist",
     "dev": "tsc --watch",
     "typecheck": "tsc --noEmit",

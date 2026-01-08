@@ -30,7 +30,8 @@ fi
 
 # Play a notification sound when Codex finishes a response
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-SOUND_PATH="$SCRIPT_DIR/../../../assets/notify.mp3"
+SOUND_PATH="$SCRIPT_DIR/../assets/notify.mp3"
+FALLBACK_SOUND_PATH="$SCRIPT_DIR/../../../assets/notify.mp3"
 play_notify_sound() {
     if [ -f "$SETTINGS_FILE" ]; then
         SOUND_SETTING=""
@@ -45,7 +46,11 @@ play_notify_sound() {
     fi
 
     if [ ! -f "$SOUND_PATH" ]; then
-        return
+        if [ -f "$FALLBACK_SOUND_PATH" ]; then
+            SOUND_PATH="$FALLBACK_SOUND_PATH"
+        else
+            return
+        fi
     fi
 
     if command -v afplay > /dev/null 2>&1; then

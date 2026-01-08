@@ -1,6 +1,6 @@
 {
   "name": "promptvc",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Version control for AI prompts - track, version, and visualize your AI-assisted coding sessions",
   "workspaces": [

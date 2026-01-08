@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import { getRepoRoot, getBranch, getHeadHash, getDiff, getChangedFiles, getUncommittedFiles, getUncommittedDiff } from './git';
 import { initDb, insertSession } from './store';
 import { PromptChange } from '@promptvc/types';
+import { redactSensitive } from './redact';
 
 /**
  * Maximum length for prompt and response snippets
@@ -152,6 +153,9 @@ export async function main(): Promise<void> {
 
   // Extract prompt from args
   let promptFromArgs = extractPrompt(args);
+  if (promptFromArgs) {
+    promptFromArgs = redactSensitive(promptFromArgs);
+  }
 
   // Spawn the real codex CLI with inherited stdio
   // This allows codex to detect it's running in a terminal
@@ -184,6 +188,7 @@ export async function main(): Promise<void> {
         // Get the diff for committed changes
         diff = await getDiff(preHash, 'HEAD');
       }
+      diff = redactSensitive(diff);
 
       // Try to read prompts from notify hook first (faster, real-time)
       let capturedPrompts: string[] = [];
@@ -199,7 +204,11 @@ export async function main(): Promise<void> {
               // Check if it's the new format (array of PromptChange objects)
               if (sessionData.length > 0 && typeof sessionData[0] === 'object' && 'prompt' in sessionData[0]) {
                 // New format: array of PromptChange objects
-                perPromptChanges = sessionData as PromptChange[];
+                perPromptChanges = (sessionData as PromptChange[]).map((change) => ({
+                  ...change,
+                  prompt: redactSensitive(change.prompt),
+                  diff: redactSensitive(change.diff),
+                }));
                 capturedPrompts = perPromptChanges.map(pc => pc.prompt);
               } else {
                 // Old format: array of strings
@@ -223,6 +232,9 @@ export async function main(): Promise<void> {
           capturedPrompts = readCodexSessionPrompts();
         }
       }
+      if (capturedPrompts.length > 0) {
+        capturedPrompts = capturedPrompts.map(redactSensitive);
+      }
 
       // Determine the final prompt to use
       let finalPrompt: string;
@@ -242,6 +254,7 @@ export async function main(): Promise<void> {
         finalPrompt = generatePromptFromFiles(changedFiles);
         responseSnippet = `Modified ${changedFiles.length} file(s)`;
       }
+      finalPrompt = redactSensitive(finalPrompt);
 
       // Determine mode
       const mode: 'oneshot' | 'interactive' = promptFromArgs ? 'oneshot' : 'interactive';

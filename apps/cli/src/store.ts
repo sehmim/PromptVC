@@ -1,7 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { PromptSession } from '@promptvc/types';
+import { PromptSession, PromptChange } from '@promptvc/types';
 import { v4 as uuidv4 } from 'uuid';
+import { redactSensitive } from './redact';
 
 let sessionsFilePath: string | null = null;
 const DEFAULT_SETTINGS = { notifySoundEnabled: true };
@@ -68,6 +69,24 @@ function readSessions(): PromptSession[] {
   }
 }
 
+function redactPromptChange(change: PromptChange): PromptChange {
+  return {
+    ...change,
+    prompt: redactSensitive(change.prompt),
+    diff: redactSensitive(change.diff),
+  };
+}
+
+function redactPromptSession(session: PromptSession): PromptSession {
+  return {
+    ...session,
+    prompt: redactSensitive(session.prompt),
+    responseSnippet: redactSensitive(session.responseSnippet),
+    diff: redactSensitive(session.diff),
+    perPromptChanges: session.perPromptChanges?.map(redactPromptChange),
+  };
+}
+
 /**
  * Write sessions to the JSON file
  */
@@ -76,7 +95,8 @@ function writeSessions(sessions: PromptSession[]): void {
     throw new Error('Storage not initialized. Call initDb first.');
   }
 
-  fs.writeFileSync(sessionsFilePath, JSON.stringify(sessions, null, 2));
+  const redactedSessions = sessions.map(redactPromptSession);
+  fs.writeFileSync(sessionsFilePath, JSON.stringify(redactedSessions, null, 2));
 }
 
 /**
@@ -104,7 +124,7 @@ export function insertSession(session: Omit<PromptSession, 'id'>): string {
  */
 export function getSessions(limit: number = 50, offset: number = 0): PromptSession[] {
   const sessions = readSessions();
-  return sessions.slice(offset, offset + limit);
+  return sessions.slice(offset, offset + limit).map(redactPromptSession);
 }
 
 /**
@@ -112,7 +132,8 @@ export function getSessions(limit: number = 50, offset: number = 0): PromptSessi
  */
 export function getSessionById(id: string): PromptSession | null {
   const sessions = readSessions();
-  return sessions.find(s => s.id === id) || null;
+  const session = sessions.find(s => s.id === id) || null;
+  return session ? redactPromptSession(session) : null;
 }
 
 /**
@@ -120,5 +141,5 @@ export function getSessionById(id: string): PromptSession | null {
  */
 export function getSessionsByProvider(provider: string, limit: number = 50): PromptSession[] {
   const sessions = readSessions();
-  return sessions.filter(s => s.provider === provider).slice(0, limit);
+  return sessions.filter(s => s.provider === provider).slice(0, limit).map(redactPromptSession);
 }

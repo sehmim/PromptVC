@@ -1,5 +1,5 @@
 {
-  "name": "@promptvc/cli",
+  "name": "promptvc",
   "version": "0.1.0",
   "description": "CLI tool to wrap AI assistants and log prompts/diffs",
   "homepage": "https://v0-prompt-version-control-pi.vercel.app/",
@@ -15,10 +15,17 @@
     "promptvc": "bin/promptvc",
     "promptvc-codex": "bin/promptvc-codex"
   },
+  "files": [
+    "bin",
+    "dist",
+    "hooks",
+    "assets"
+  ],
   "scripts": {
     "build": "tsc",
     "clean": "rm -rf dist",
     "dev": "tsc --watch",
+    "prepublishOnly": "npm run build",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

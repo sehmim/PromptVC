@@ -3,6 +3,60 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { PromptSession, PromptChange } from '@promptvc/types';
 
+const PRIVATE_KEY_BLOCK = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g;
+const REDACTION_PATTERNS: Array<[RegExp, string]> = [
+  [/\bgh[pousr]_[A-Za-z0-9]{20,}\b/g, '[REDACTED_GITHUB_TOKEN]'],
+  [/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, '[REDACTED_GITHUB_TOKEN]'],
+  [/\bsk-[A-Za-z0-9]{20,}\b/g, '[REDACTED_OPENAI_KEY]'],
+  [/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, '[REDACTED_SLACK_TOKEN]'],
+  [/\bAIza[0-9A-Za-z_-]{35}\b/g, '[REDACTED_GOOGLE_KEY]'],
+  [/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, '[REDACTED_AWS_ACCESS_KEY]'],
+  [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9._-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, '[REDACTED_JWT]'],
+  [/(authorization\s*:\s*bearer)\s+[^\s]+/gi, '$1 [REDACTED]'],
+  [/(\b(?:postgres|mysql|mongodb|redis|amqp)s?:\/\/)([^:\s/@]+):([^\s/@]+)@/gi, '$1$2:[REDACTED]@'],
+  [/(\b(?:api[_-]?key|secret|password|passwd|token|access[_-]?key|client[_-]?secret|private[_-]?key|auth[_-]?token)\b)(\s*[=:]\s*)(['"]?)([^'"\r\n]+)\3/gi, '$1$2[REDACTED]'],
+  [/(\b(?:api[_-]?key|secret|password|passwd|token|access[_-]?key|client[_-]?secret|private[_-]?key|auth[_-]?token)\b)\s+([A-Za-z0-9+/_=-]{8,})/gi, '$1 [REDACTED]'],
+  [/(\bssh-(?:rsa|ed25519)\b|\becdsa-[^\s]+)\s+[A-Za-z0-9+/=]{40,}/g, '$1 [REDACTED_SSH_KEY]'],
+];
+
+function redactSensitive(value: string): string {
+  if (!value) {
+    return value;
+  }
+
+  let redacted = value.replace(PRIVATE_KEY_BLOCK, (match) => {
+    const lines = match.split('\n');
+    if (lines.length >= 2) {
+      return `${lines[0]}\n[REDACTED_PRIVATE_KEY]\n${lines[lines.length - 1]}`;
+    }
+    return '[REDACTED_PRIVATE_KEY]';
+  });
+
+  for (const [pattern, replacement] of REDACTION_PATTERNS) {
+    redacted = redacted.replace(pattern, replacement);
+  }
+
+  return redacted;
+}
+
+function redactPromptChange(change: PromptChange): PromptChange {
+  return {
+    ...change,
+    prompt: redactSensitive(change.prompt),
+    diff: redactSensitive(change.diff),
+  };
+}
+
+function redactPromptSession(session: PromptSession): PromptSession {
+  return {
+    ...session,
+    prompt: redactSensitive(session.prompt),
+    responseSnippet: redactSensitive(session.responseSnippet),
+    diff: redactSensitive(session.diff),
+    perPromptChanges: session.perPromptChanges?.map(redactPromptChange),
+  };
+}
+
 function normalizeTagsInput(input: string): string[] {
   const tags = input
     .split(',')
@@ -139,7 +193,7 @@ function getCodexIconUri(repoRoot: string | null): vscode.Uri | null {
     return null;
   }
 
-  const iconPath = path.join(repoRoot, 'assets', 'openai.svg');
+  const iconPath = path.join(repoRoot, 'media', 'openai.svg');
   if (!fs.existsSync(iconPath)) {
     return null;
   }
@@ -201,7 +255,6 @@ class PromptChangeTreeItem extends vscode.TreeItem {
     this.tooltip = `${promptChange.prompt}\n\nFiles: ${promptChange.files.length}\nTime: ${new Date(promptChange.timestamp).toLocaleString()}\n+${addedLines} -${removedLines} lines`;
     this.description = `${promptChange.files.length} file${promptChange.files.length !== 1 ? 's' : ''} • +${addedLines} -${removedLines}`;
     this.contextValue = 'promptChange';
-    this.iconPath = new vscode.ThemeIcon('git-commit', new vscode.ThemeColor('gitDecoration.modifiedResourceForeground'));
 
     // Make it clickable to view the full diff
     this.command = {
@@ -360,6 +413,18 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
     void vscode.commands.executeCommand('setContext', 'promptvc.viewMode', this.viewMode);
   }
 
+  private updateInitContext(): void {
+    if (!this.repoRoot) {
+      void vscode.commands.executeCommand('setContext', 'promptvc.hasInit', false);
+      return;
+    }
+
+    const promptvcDir = path.join(this.repoRoot, PROMPTVC_DIR_NAME);
+    const sessionsPath = path.join(promptvcDir, 'sessions.json');
+    const hasInit = fs.existsSync(promptvcDir) && fs.existsSync(sessionsPath);
+    void vscode.commands.executeCommand('setContext', 'promptvc.hasInit', hasInit);
+  }
+
   public setShowHiddenSessions(show: boolean): void {
     if (this.showHiddenSessions === show) {
       return;
@@ -400,6 +465,11 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
       console.log('PromptVC: Sessions file created, refreshing...');
       this.refresh();
     });
+
+    this.fileWatcher.onDidDelete(() => {
+      console.log('PromptVC: Sessions file deleted, refreshing...');
+      this.refresh();
+    });
   }
 
   /**
@@ -411,11 +481,14 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
       const workspaceFolders = vscode.workspace.workspaceFolders;
       if (!workspaceFolders || workspaceFolders.length === 0) {
         console.log('PromptVC: No workspace folders found');
+        this.repoRoot = null;
+        this.updateInitContext();
         return;
       }
 
       this.repoRoot = workspaceFolders[0].uri.fsPath;
       console.log('PromptVC: Repo root:', this.repoRoot);
+      this.updateInitContext();
 
       this.sessionsFilePath = path.join(this.repoRoot, '.promptvc', 'sessions.json');
       console.log('PromptVC: Looking for sessions at:', this.sessionsFilePath);
@@ -441,7 +514,11 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
 
     try {
       const data = fs.readFileSync(this.sessionsFilePath, 'utf-8');
-      return JSON.parse(data);
+      const sessions = JSON.parse(data);
+      if (!Array.isArray(sessions)) {
+        return [];
+      }
+      return sessions.map(redactPromptSession);
     } catch (error) {
       console.error('PromptVC: Failed to read sessions:', error);
       return [];
@@ -457,7 +534,8 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
     }
 
     try {
-      fs.writeFileSync(this.sessionsFilePath, JSON.stringify(sessions, null, 2));
+      const redactedSessions = sessions.map(redactPromptSession);
+      fs.writeFileSync(this.sessionsFilePath, JSON.stringify(redactedSessions, null, 2));
       return true;
     } catch (error) {
       console.error('PromptVC: Failed to write sessions:', error);
