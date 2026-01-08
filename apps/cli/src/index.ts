@@ -3,6 +3,8 @@
 import { Command } from 'commander';
 import { getSessions, initDb, getSessionById, initRepoStorage } from './store';
 import { getRepoRoot } from './git';
+import { runConfigCommand } from './config';
+import kleur from 'kleur';
 
 const program = new Command();
 
@@ -22,6 +24,14 @@ program
       console.log(`Initialized PromptVC in ${result.promptvcDir}`);
       console.log(`Sessions: ${result.sessionsFilePath}`);
       console.log(`Settings: ${result.settingsFilePath}`);
+      console.log('');
+      console.log(kleur.blue('Run your coding ai. (codex, claude, gemini)'));
+      console.log('');
+      console.log(kleur.green('Get the Prompt Version Control VSCode extension to enhance your experience!'));
+      console.log(kleur.blue('https://marketplace.visualstudio.com/items?itemName=your-extension-id'));
+      console.log('');
+      console.log(kleur.green('Findout more at https://promptvc.dev'));
+
     } catch (error) {
       console.error('Error:', error);
       process.exit(1);
@@ -94,6 +104,13 @@ program
       console.error('Error:', error);
       process.exit(1);
     }
+  });
+
+program
+  .command('config')
+  .description('Configure the Codex notify hook for PromptVC')
+  .action(() => {
+    runConfigCommand();
   });
 
 program.parse();
