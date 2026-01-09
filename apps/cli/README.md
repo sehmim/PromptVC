@@ -8,7 +8,24 @@ Local-first, prompt-by-prompt diff tracking for AI coding sessions.
 - Git
 - Codex CLI
 - jq (required for per-prompt capture)
-- macOS/Linux (Windows: use WSL or Git Bash)
+- macOS/Linux
+- Windows: Git Bash required (run `promptvc` + `codex` in Git Bash)
+
+### Windows notes
+
+Install `jq` (pick one):
+
+```bash
+winget install jqlang.jq
+```
+
+```bash
+choco install jq
+```
+
+```bash
+scoop install jq
+```
 
 ## Install
 

@@ -749,6 +749,8 @@ async function showPromptDiff(promptChange: PromptChange, focusFile?: string): P
       }
     );
 
+    const repoRoot = getRepoRootFromWorkspace();
+    registerWebviewOpenFileHandler(panel, repoRoot);
     panel.webview.html = getPromptWebviewContent(promptChange, focusFile);
   } catch (error) {
     vscode.window.showErrorMessage(`Failed to open prompt diff: ${error}`);
@@ -831,6 +833,8 @@ function showSessionDiff(session: PromptSession): void {
     }
   );
 
+  const repoRoot = session.repoRoot || getRepoRootFromWorkspace();
+  registerWebviewOpenFileHandler(panel, repoRoot);
   panel.webview.html = getWebviewContent(session);
 }
 
@@ -844,6 +848,64 @@ function escapeHtml(text: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+}
+
+function stripDiffPrefix(fileName: string): string {
+  if (fileName.startsWith('a/')) {
+    return fileName.slice(2);
+  }
+  if (fileName.startsWith('b/')) {
+    return fileName.slice(2);
+  }
+  return fileName;
+}
+
+function resolveFilePath(repoRoot: string | null, fileName: string): string | null {
+  const cleaned = stripDiffPrefix(fileName);
+  if (path.isAbsolute(cleaned)) {
+    return cleaned;
+  }
+  if (!repoRoot) {
+    return null;
+  }
+  return path.join(repoRoot, cleaned);
+}
+
+async function openFileAtLine(fileName: string, lineNumber: number | undefined, repoRoot: string | null): Promise<void> {
+  const filePath = resolveFilePath(repoRoot, fileName);
+  if (!filePath) {
+    vscode.window.showErrorMessage('PromptVC: No workspace folder found.');
+    return;
+  }
+  if (!fs.existsSync(filePath)) {
+    vscode.window.showErrorMessage(`PromptVC: File not found: ${stripDiffPrefix(fileName)}`);
+    return;
+  }
+
+  const targetLine = Number.isFinite(lineNumber) && lineNumber && lineNumber > 0 ? lineNumber : 1;
+  const position = new vscode.Position(targetLine - 1, 0);
+  const document = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+  const editor = await vscode.window.showTextDocument(document, { preview: true });
+  editor.selection = new vscode.Selection(position, position);
+  editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
+}
+
+function registerWebviewOpenFileHandler(panel: vscode.WebviewPanel, repoRoot: string | null): void {
+  panel.webview.onDidReceiveMessage(async (message) => {
+    if (!message || message.type !== 'openFileAtLine') {
+      return;
+    }
+    const fileName = typeof message.fileName === 'string' ? message.fileName : '';
+    const lineNumber = typeof message.lineNumber === 'number' ? message.lineNumber : undefined;
+    if (!fileName) {
+      return;
+    }
+    try {
+      await openFileAtLine(fileName, lineNumber, repoRoot);
+    } catch (error) {
+      vscode.window.showErrorMessage(`PromptVC: Failed to open file: ${error}`);
+    }
+  });
 }
 
 /**
@@ -1027,6 +1089,8 @@ function generateFileDiffHtml(file: FileDiff, index: number): string {
       const lineClass = `diff-line diff-line-${line.type}`;
       const oldNum = line.oldLineNumber !== undefined ? line.oldLineNumber : '';
       const newNum = line.newLineNumber !== undefined ? line.newLineNumber : '';
+      const lineNumber = line.newLineNumber ?? line.oldLineNumber;
+      const lineAttr = typeof lineNumber === 'number' ? ` data-line-number="${lineNumber}"` : '';
 
       let indicator = '';
       if (line.type === 'addition') indicator = '+';
@@ -1034,7 +1098,7 @@ function generateFileDiffHtml(file: FileDiff, index: number): string {
       else if (line.type === 'context') indicator = ' ';
 
       return `
-        <tr class="${lineClass}">
+        <tr class="${lineClass}"${lineAttr}>
           <td class="line-number">${oldNum}</td>
           <td class="line-number">${newNum}</td>
           <td class="line-indicator">${indicator}</td>
@@ -1117,6 +1181,8 @@ function generateFileDiffSplitHtml(file: FileDiff, index: number): string {
       const rightType = row.right?.type ?? 'empty';
       const leftNum = row.left?.oldLineNumber ?? '';
       const rightNum = row.right?.newLineNumber ?? '';
+      const jumpLine = row.right?.newLineNumber ?? row.left?.oldLineNumber;
+      const lineAttr = typeof jumpLine === 'number' ? ` data-line-number="${jumpLine}"` : '';
       const leftIndicator = row.left
         ? (row.left.type === 'deletion' ? '-' : row.left.type === 'addition' ? '+' : ' ')
         : '';
@@ -1127,7 +1193,7 @@ function generateFileDiffSplitHtml(file: FileDiff, index: number): string {
       const rightContent = row.right ? escapeHtml(row.right.content) : '';
 
       return `
-        <tr class="split-row">
+        <tr class="split-row"${lineAttr}>
           <td class="split-line-number split-left split-${leftType}">${leftNum}</td>
           <td class="split-line-indicator split-left split-${leftType}">${leftIndicator}</td>
           <td class="split-line-content split-left split-${leftType}"><pre data-language="${language}">${leftContent}</pre></td>
@@ -1984,6 +2050,7 @@ function getWebviewContentTemplate(
         const buttons = document.querySelectorAll('.diff-toggle');
         const storageKey = '${escapeHtml(storageKey)}';
         const focusFile = ${JSON.stringify(focusFile ?? '')};
+        const vscodeApi = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : null;
 
         // Diff view toggle
         function setView(view) {
@@ -2154,6 +2221,56 @@ function getWebviewContentTemplate(
                 }
 
                 focusFileDiff(fileName);
+            });
+        });
+
+        function handleOpenFileRequest(fileName, lineNumber) {
+            if (!vscodeApi || !fileName) {
+                return;
+            }
+            vscodeApi.postMessage({
+                type: 'openFileAtLine',
+                fileName,
+                lineNumber,
+            });
+        }
+
+        document.addEventListener('dblclick', (event) => {
+            const target = event.target instanceof Element ? event.target : null;
+            if (!target) {
+                return;
+            }
+            const row = target.closest('tr[data-line-number]');
+            if (!row) {
+                return;
+            }
+            const fileNode = row.closest('.file-diff');
+            if (!fileNode) {
+                return;
+            }
+            const fileName = fileNode.dataset.fileName;
+            const lineNumber = Number(row.dataset.lineNumber);
+            if (!fileName || !Number.isFinite(lineNumber)) {
+                return;
+            }
+            handleOpenFileRequest(fileName, lineNumber);
+        });
+
+        document.querySelectorAll('.file-diff-header').forEach(header => {
+            header.addEventListener('dblclick', (event) => {
+                event.preventDefault();
+                const currentTarget = event.currentTarget instanceof Element ? event.currentTarget : null;
+                if (!currentTarget) {
+                    return;
+                }
+                const fileNode = currentTarget.closest('.file-diff');
+                if (!fileNode) {
+                    return;
+                }
+                const fileName = fileNode.dataset.fileName;
+                const firstRow = fileNode.querySelector('tr[data-line-number]');
+                const lineNumber = firstRow ? Number(firstRow.dataset.lineNumber) : undefined;
+                handleOpenFileRequest(fileName, lineNumber);
             });
         });
 

@@ -30,7 +30,11 @@ Requirements:
 - VS Code 1.80+
 - Codex CLI
 - jq (required for per-prompt capture)
-- macOS/Linux (Windows: use WSL or Git Bash)
+- macOS/Linux
+- Windows: Git Bash required (run `promptvc` + `codex` in Git Bash)
+
+Windows notes:
+- Install `jq` (pick one): `winget install jqlang.jq`, `choco install jq`, or `scoop install jq`.
 
 1) Clone and install dependencies:
 ```bash

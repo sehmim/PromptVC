@@ -130,6 +130,8 @@ code --install-extension SehmimHaque.promptvc-vscode
 npm install -g promptvc
 ```
 
+Windows: run `promptvc` and `codex` from Git Bash and ensure `jq` is installed.
+
 ---
 
 ## Getting Started

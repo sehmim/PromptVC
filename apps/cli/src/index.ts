@@ -109,8 +109,8 @@ program
 program
   .command('config')
   .description('Configure the Codex notify hook for PromptVC')
-  .action(() => {
-    runConfigCommand();
+  .action(async () => {
+    await runConfigCommand();
   });
 
 program.parse();
