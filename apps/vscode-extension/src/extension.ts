@@ -188,17 +188,13 @@ function setNotifySoundEnabled(repoRoot: string | null, enabled: boolean): boole
   return writePromptvcSettings(repoRoot, settings);
 }
 
-function getCodexIconUri(repoRoot: string | null): vscode.Uri | null {
-  if (!repoRoot) {
+function getCodexIconUri(extensionUri: vscode.Uri): vscode.Uri | null {
+  const iconUri = vscode.Uri.joinPath(extensionUri, 'media', 'openai.svg');
+  if (!fs.existsSync(iconUri.fsPath)) {
     return null;
   }
 
-  const iconPath = path.join(repoRoot, 'media', 'openai.svg');
-  if (!fs.existsSync(iconPath)) {
-    return null;
-  }
-
-  return vscode.Uri.file(iconPath);
+  return iconUri;
 }
 
 /**
@@ -682,7 +678,7 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
 
       // SESSION VIEW MODE: Show grouped by sessions (default)
       const items: PromptSessionTreeItem[] = [];
-      const codexIconUri = getCodexIconUri(this.repoRoot);
+      const codexIconUri = getCodexIconUri(this.context.extensionUri);
 
       console.log(`PromptVC: Found ${sessions.length} completed sessions to display`);
 
@@ -1170,6 +1166,63 @@ function generateFileDiffSplitHtml(file: FileDiff, index: number): string {
   `;
 }
 
+const filesIconSvg = `
+  <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+    <path d="M2.5 2.5A1.5 1.5 0 0 1 4 1h5l3.5 3.5V13A1.5 1.5 0 0 1 11 14.5H4A1.5 1.5 0 0 1 2.5 13z" fill="currentColor" opacity="0.85"/>
+    <path d="M9 1v3.5h3.5" fill="currentColor"/>
+    <path d="M1.5 4A1.5 1.5 0 0 1 3 2.5h.75v1H3a.5.5 0 0 0-.5.5V13a.5.5 0 0 0 .5.5h7.25v1H3A1.5 1.5 0 0 1 1.5 13z" fill="currentColor" opacity="0.45"/>
+  </svg>
+`;
+
+function renderFilesChangedHeading(label: string, count: number): string {
+  return `
+    <h3 class="section-title">
+      <span class="section-title-icon">${filesIconSvg}</span>
+      <span class="section-title-text">${escapeHtml(label)}</span>
+      <span class="section-title-count">${count}</span>
+    </h3>
+  `;
+}
+
+function renderFilesChangedListItems(files: string[]): string {
+  return files.map(file => {
+    const escapedFile = escapeHtml(file);
+    return `
+      <li>
+        <button class="file-link" type="button" data-file-name="${escapedFile}" title="${escapedFile}">
+          <span class="file-link-text">${escapedFile}</span>
+        </button>
+      </li>
+    `;
+  }).join('');
+}
+
+function renderFilesChangedSection(
+  files: string[],
+  options?: { compact?: boolean; emptyMessage?: string }
+): string {
+  const emptyMessage = options?.emptyMessage ?? 'No files changed';
+
+  if (!files || files.length === 0) {
+    return `
+      <div class="files-changed files-changed-empty">
+        <div class="no-diff">${escapeHtml(emptyMessage)}</div>
+      </div>
+    `;
+  }
+
+  const itemsHtml = renderFilesChangedListItems(files);
+  const compactClass = options?.compact ? ' files-changed-compact' : '';
+
+  return `
+    <div class="files-changed${compactClass}">
+      <ul class="files-changed-list">
+        ${itemsHtml}
+      </ul>
+    </div>
+  `;
+}
+
 /**
  * Generate HTML content for a prompt-specific webview
  */
@@ -1186,13 +1239,9 @@ function getPromptWebviewContent(promptChange: PromptChange, focusFile?: string)
     ? parsedDiff.map((file, index) => generateFileDiffSplitHtml(file, index)).join('')
     : `<div class="no-diff">No changes to display</div>`;
 
-  const filesListHtml = promptChange.files
-    .map(file => `<li><code>${escapeHtml(file)}</code></li>`)
-    .join('');
-
-  const filesSectionHtml = promptChange.files.length > 0
-    ? `<ul>${filesListHtml}</ul>`
-    : `<div class="no-diff">No files changed</div>`;
+  const filesSectionHtml = renderFilesChangedSection(promptChange.files, {
+    emptyMessage: 'No files changed',
+  });
 
   const timestampRaw = typeof promptChange.timestamp === 'string' ? promptChange.timestamp : '';
   const promptDate = new Date(timestampRaw);
@@ -1225,23 +1274,21 @@ function getPromptWebviewContent(promptChange: PromptChange, focusFile?: string)
         </div>
 
         <h3>Prompt</h3>
-        <pre>${escapeHtml(promptChange.prompt)}</pre>
+        <pre class="prompt-block">${escapeHtml(promptChange.prompt)}</pre>
 
-        <h3>Files Changed (${promptChange.files.length})</h3>
+        ${renderFilesChangedHeading('Files Changed', promptChange.files.length)}
         ${filesSectionHtml}
 
         <h3>Prompt Diff</h3>
-        <div class="complete-diff">
-            <div class="diff-controls">
-                <button class="diff-toggle" data-view="unified">Unified</button>
-                <button class="diff-toggle is-active" data-view="split">Split</button>
-            </div>
-            <div class="pr-diff-viewer diff-unified">
-                ${prDiffHtml}
-            </div>
-            <div class="pr-diff-viewer diff-split">
-                ${prDiffSplitHtml}
-            </div>
+        <div class="diff-controls diff-controls-top">
+            <button class="diff-toggle" data-view="unified">Unified</button>
+            <button class="diff-toggle is-active" data-view="split">Split</button>
+        </div>
+        <div class="pr-diff-viewer diff-unified">
+            ${prDiffHtml}
+        </div>
+        <div class="pr-diff-viewer diff-split">
+            ${prDiffSplitHtml}
         </div>
     </div>
   `;
@@ -1259,7 +1306,10 @@ function getWebviewContent(session: PromptSession): string {
     perPromptHtml = `
       <div class="section">
         ${session.perPromptChanges.map((pc, index) => {
-          const filesHtml = pc.files.map(f => `<li><code>${escapeHtml(f)}</code></li>`).join('');
+          const filesSectionHtml = renderFilesChangedSection(pc.files, {
+            compact: true,
+            emptyMessage: 'No files changed',
+          });
           const parsedPromptDiff = parseDiff(pc.diff);
           const totalAdditions = parsedPromptDiff.reduce((sum, file) => sum + file.additions, 0);
           const totalDeletions = parsedPromptDiff.reduce((sum, file) => sum + file.deletions, 0);
@@ -1279,8 +1329,8 @@ function getWebviewContent(session: PromptSession): string {
               </div>
               <div class="prompt-text">${escapeHtml(pc.prompt)}</div>
               <div class="files-list">
-                <strong>Files (${pc.files.length}):</strong>
-                <ul>${filesHtml}</ul>
+                <div class="files-list-label">Files (${pc.files.length})</div>
+                ${filesSectionHtml}
               </div>
               <details open>
                 <summary>View Changes</summary>
@@ -1295,10 +1345,9 @@ function getWebviewContent(session: PromptSession): string {
     `;
   }
 
-  // Overall files list
-  const filesHtml = session.files
-    .map(file => `<li><code>${escapeHtml(file)}</code></li>`)
-    .join('');
+  const filesSectionHtml = renderFilesChangedSection(session.files, {
+    emptyMessage: 'No files changed',
+  });
 
   // Parse and generate PR-style diff
   const parsedDiff = parseDiff(session.diff);
@@ -1315,25 +1364,23 @@ function getWebviewContent(session: PromptSession): string {
         <h2>Overall Summary</h2>
         <h3>${session.perPromptChanges && session.perPromptChanges.length > 1 ? 'Prompts' : 'Prompt'}</h3>
         ${session.perPromptChanges && session.perPromptChanges.length > 1
-          ? `<ol style="padding-left: 20px;">${session.perPromptChanges.map(pc => `<li style="margin: 8px 0;"><pre style="margin: 0;">${escapeHtml(pc.prompt)}</pre></li>`).join('')}</ol>`
-          : `<pre>${escapeHtml(session.prompt)}</pre>`
+          ? `<ol style="padding-left: 20px;">${session.perPromptChanges.map(pc => `<li style="margin: 8px 0;"><pre class="prompt-block prompt-block-compact">${escapeHtml(pc.prompt)}</pre></li>`).join('')}</ol>`
+          : `<pre class="prompt-block">${escapeHtml(session.prompt)}</pre>`
         }
 
-        <h3>All Files Changed (${session.files.length})</h3>
-        <ul>${filesHtml}</ul>
+        ${renderFilesChangedHeading('All Files Changed', session.files.length)}
+        ${filesSectionHtml}
 
         <h3>Complete Diff</h3>
-        <div class="complete-diff">
-            <div class="diff-controls">
-                <button class="diff-toggle" data-view="unified">Unified</button>
-                <button class="diff-toggle is-active" data-view="split">Split</button>
-            </div>
-            <div class="pr-diff-viewer diff-unified">
-                ${prDiffHtml}
-            </div>
-            <div class="pr-diff-viewer diff-split">
-                ${prDiffSplitHtml}
-            </div>
+        <div class="diff-controls diff-controls-top">
+            <button class="diff-toggle" data-view="unified">Unified</button>
+            <button class="diff-toggle is-active" data-view="split">Split</button>
+        </div>
+        <div class="pr-diff-viewer diff-unified">
+            ${prDiffHtml}
+        </div>
+        <div class="pr-diff-viewer diff-split">
+            ${prDiffSplitHtml}
         </div>
 
         <h3>Response</h3>
@@ -1386,6 +1433,36 @@ function getWebviewContentTemplate(
         h1, h2, h3 {
             color: var(--vscode-foreground);
         }
+        .section-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 16px 0 10px;
+            padding: 6px 10px;
+            border-radius: 8px;
+            border: 1px solid var(--promptvc-diff-border);
+            background-color: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+        }
+        .section-title-icon {
+            display: inline-flex;
+            width: 16px;
+            height: 16px;
+            color: var(--vscode-symbolIcon-fileForeground, var(--vscode-foreground));
+        }
+        .section-title-icon svg {
+            width: 16px;
+            height: 16px;
+        }
+        .section-title-count {
+            margin-left: auto;
+            background-color: var(--vscode-badge-background);
+            color: var(--vscode-badge-foreground);
+            font-size: 0.85em;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 999px;
+            font-family: var(--vscode-editor-font-family);
+        }
         .section {
             margin-bottom: 30px;
         }
@@ -1411,6 +1488,15 @@ function getWebviewContentTemplate(
             font-size: var(--vscode-editor-font-size);
             border-left: 3px solid var(--vscode-textBlockQuote-border);
         }
+        .prompt-block {
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+            overflow-x: hidden;
+        }
+        .prompt-block-compact {
+            margin: 0;
+        }
         code {
             font-family: var(--vscode-editor-font-family);
             background-color: var(--vscode-textCodeBlock-background);
@@ -1423,6 +1509,67 @@ function getWebviewContentTemplate(
         }
         li {
             padding: 4px 0;
+        }
+        .files-changed {
+            border: 1px solid var(--promptvc-diff-border);
+            border-radius: 8px;
+            padding: 8px;
+            background-color: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+        }
+        .files-changed-compact {
+            padding: 6px;
+        }
+        .files-changed-list {
+            margin: 0;
+            display: grid;
+            gap: 6px 12px;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        }
+        .files-changed-list li {
+            padding: 0;
+        }
+        .files-changed-compact .files-changed-list {
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        }
+        .files-changed-empty .no-diff {
+            padding: 12px;
+        }
+        .file-link {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 8px;
+            border-radius: 6px;
+            border: 1px solid transparent;
+            background: transparent;
+            color: var(--vscode-foreground);
+            font-family: var(--vscode-editor-font-family);
+            font-size: 12px;
+            text-align: left;
+            cursor: pointer;
+        }
+        .file-link:hover {
+            background-color: var(--vscode-list-hoverBackground);
+        }
+        .file-link:focus-visible {
+            outline: none;
+            border-color: var(--vscode-focusBorder);
+            box-shadow: 0 0 0 1px var(--vscode-focusBorder);
+        }
+        .file-link.is-active {
+            background-color: var(--vscode-list-activeSelectionBackground, var(--vscode-list-focusBackground));
+            border-color: var(--vscode-focusBorder);
+            color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground));
+        }
+        .file-link-text {
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
+        .files-list-label {
+            font-weight: 600;
+            color: var(--vscode-descriptionForeground);
+            margin-bottom: 6px;
         }
         .diff {
             font-size: 13px;
@@ -1446,31 +1593,24 @@ function getWebviewContentTemplate(
             background-color: var(--vscode-button-background);
             color: var(--vscode-button-foreground);
         }
-        .complete-diff {
-            border: 1px solid var(--promptvc-editor-border);
-            border-radius: 10px;
-            padding: 12px;
-            background: linear-gradient(180deg, rgba(0, 0, 0, 0.04), rgba(0, 0, 0, 0)), var(--promptvc-editor-bg);
-            box-shadow: 0 6px 18px var(--promptvc-editor-shadow);
+        .diff-controls-top {
+            margin-top: 4px;
         }
-        .complete-diff .diff-controls {
-            margin-top: 0;
-        }
-        .complete-diff .pr-diff-viewer {
+        .pr-diff-viewer {
             margin-top: 12px;
         }
-        .complete-diff .line-number,
-        .complete-diff .split-line-number {
+        .pr-diff-viewer .line-number,
+        .pr-diff-viewer .split-line-number {
             font-variant-numeric: tabular-nums;
             color: var(--promptvc-editor-gutter-fg);
             background-color: var(--promptvc-editor-gutter-bg);
         }
-        .complete-diff .line-indicator,
-        .complete-diff .split-line-indicator {
+        .pr-diff-viewer .line-indicator,
+        .pr-diff-viewer .split-line-indicator {
             background-color: var(--promptvc-editor-gutter-bg);
         }
-        .complete-diff .line-content pre,
-        .complete-diff .split-line-content pre {
+        .pr-diff-viewer .line-content pre,
+        .pr-diff-viewer .split-line-content pre {
             font-variant-ligatures: none;
             tab-size: 2;
             letter-spacing: 0.1px;
@@ -1520,12 +1660,15 @@ function getWebviewContentTemplate(
             padding: 10px;
             background-color: var(--vscode-textBlockQuote-background);
             border-radius: 4px;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            word-break: break-word;
         }
         .files-list {
             margin: 10px 0;
         }
-        .files-list ul {
-            margin-top: 5px;
+        .files-list .files-changed {
+            margin-top: 4px;
         }
         details {
             margin-top: 10px;
@@ -1945,22 +2088,44 @@ function getWebviewContentTemplate(
             return value.replace(/\\\\/g, '/');
         }
 
+        function findMatches(targetFile, elements, getValue) {
+            if (!targetFile) {
+                return [];
+            }
+
+            const normalizedTarget = normalizePath(targetFile);
+            let matches = elements.filter(el => normalizePath(getValue(el) || '') === normalizedTarget);
+
+            if (matches.length === 0) {
+                const targetBase = normalizedTarget.split('/').pop();
+                matches = elements.filter(el => (getValue(el) || '').split('/').pop() === targetBase);
+            }
+
+            return matches;
+        }
+
+        function updateActiveFileLinks(targetFile) {
+            const fileLinks = Array.from(document.querySelectorAll('.file-link'));
+            fileLinks.forEach(link => link.classList.remove('is-active'));
+
+            const matches = findMatches(targetFile, fileLinks, el => el.dataset.fileName || '');
+            matches.forEach(link => link.classList.add('is-active'));
+        }
+
         function focusFileDiff(targetFile) {
             if (!targetFile) {
                 return;
             }
 
-            const normalizedTarget = normalizePath(targetFile);
-            let matches = Array.from(document.querySelectorAll('.file-diff'))
-                .filter(el => normalizePath(el.dataset.fileName || '') === normalizedTarget);
+            const fileDiffs = Array.from(document.querySelectorAll('.file-diff'));
+            const matches = findMatches(targetFile, fileDiffs, el => el.dataset.fileName || '');
+
+            document.querySelectorAll('.file-diff.is-focused').forEach(el => {
+                el.classList.remove('is-focused');
+            });
 
             if (matches.length === 0) {
-                const targetBase = normalizedTarget.split('/').pop();
-                matches = Array.from(document.querySelectorAll('.file-diff'))
-                    .filter(el => (el.dataset.fileName || '').split('/').pop() === targetBase);
-            }
-
-            if (matches.length === 0) {
+                updateActiveFileLinks(targetFile);
                 return;
             }
 
@@ -1977,7 +2142,20 @@ function getWebviewContentTemplate(
             if (focusTarget) {
                 focusTarget.scrollIntoView({ behavior: 'smooth', block: 'start' });
             }
+
+            updateActiveFileLinks(targetFile);
         }
+
+        document.querySelectorAll('.file-link').forEach(link => {
+            link.addEventListener('click', () => {
+                const fileName = link.dataset.fileName;
+                if (!fileName) {
+                    return;
+                }
+
+                focusFileDiff(fileName);
+            });
+        });
 
         focusFileDiff(focusFile);
     </script>
