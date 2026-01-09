@@ -2333,6 +2333,27 @@ export function activate(context: vscode.ExtensionContext) {
       })
     );
 
+    context.subscriptions.push(
+      vscode.commands.registerCommand('promptvc.copyInstallCommand', () => {
+        vscode.env.clipboard.writeText('npm install -g promptvc');
+        vscode.window.showInformationMessage('Copied: npm install -g promptvc');
+      })
+    );
+
+    context.subscriptions.push(
+      vscode.commands.registerCommand('promptvc.copyConfigCommand', () => {
+        vscode.env.clipboard.writeText('promptvc config');
+        vscode.window.showInformationMessage('Copied: promptvc config');
+      })
+    );
+
+    context.subscriptions.push(
+      vscode.commands.registerCommand('promptvc.copyInitCommand', () => {
+        vscode.env.clipboard.writeText('promptvc init');
+        vscode.window.showInformationMessage('Copied: promptvc init');
+      })
+    );
+
     // Watch for workspace changes
     context.subscriptions.push(
       vscode.workspace.onDidChangeWorkspaceFolders(() => {

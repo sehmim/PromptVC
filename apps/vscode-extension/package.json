@@ -1,9 +1,9 @@
 {
   "name": "promptvc-vscode",
-  "displayName": "Prompt Version Control",
-  "description": "View and explore AI prompt sessions tracked by PromptVC",
+  "displayName": "PromptVC - Prompt Tracker & Version Control",
+  "description": "LLM-agnostic prompt tracker and prompt version control with Git-style diffs. See exactly what code each prompt changed.",
   "icon": "media/logo.png",
-  "version": "0.1.1",
+  "version": "0.1.4",
   "publisher": "SehmimHaque",
   "license": "MIT",
   "homepage": "https://v0-prompt-version-control-pi.vercel.app/",
@@ -23,11 +23,18 @@
   "keywords": [
     "promptvc",
     "prompt",
-    "diff",
-    "codex",
+    "prompt tracker",
+    "prompt version control",
+    "prompt diff",
+    "prompt history",
+    "prompt review",
+    "prompt audit",
+    "prompt workflow",
+    "prompt engineering",
+    "llm",
+    "vibe coding",
     "ai",
-    "sessions",
-    "review"
+    "codex"
   ],
   "activationEvents": [
     "onStartupFinished"
@@ -35,27 +42,27 @@
   "main": "./dist/extension.js",
   "contributes": {
     "viewsContainers": {
-    "activitybar": [
-      {
-        "id": "promptvc",
-        "title": "Vibe Sessions",
-        "icon": "$(git-commit)"
-      }
-    ]
-  },
-  "views": {
-    "promptvc": [
-      {
-        "id": "promptvcSessions",
-        "name": "Vibe Sessions"
-      }
-    ]
-  },
+      "activitybar": [
+        {
+          "id": "promptvc",
+          "title": "Vibe Sessions",
+          "icon": "$(git-commit)"
+        }
+      ]
+    },
+    "views": {
+      "promptvc": [
+        {
+          "id": "promptvcSessions",
+          "name": "Vibe Sessions"
+        }
+      ]
+    },
     "viewsWelcome": [
       {
         "view": "promptvcSessions",
         "when": "!promptvc.hasInit",
-        "contents": "### Getting started\n1. Install the CLI: `npm install -g promptvc`\n2. Configure the Codex hook: `promptvc config`\n3. Initialize this repo: `promptvc init`\n\nOnce initialized, run Codex to capture sessions."
+        "contents": "# PromptVC - Prompt Tracker & Prompt Version Control\n\n> Git for prompts.\n\nPromptVC is an LLM-agnostic, local-first prompt tracker and prompt version control system. It shows you exactly what each prompt changed.\n\nWorks with any LLM via hooks (Codex today; Claude and Gemini soon).\n\n---\n\n## Getting Started\n\nFollow these steps to set up PromptVC:\n\n### 1) Install the CLI\n\n```bash\nnpm install -g promptvc\n```\n\n[Copy Install Command](command:promptvc.copyInstallCommand)\n\n### 2) Configure your AI assistant hook\n\n```bash\npromptvc config\n```\n\n[Copy Config Command](command:promptvc.copyConfigCommand)\n\n### 3) Initialize this repository\n\n```bash\npromptvc init\n```\n\n[Copy Init Command](command:promptvc.copyInitCommand)\n\n---\n\n### Important Note\n\nMake sure to start with a clean git session, or else old changes will be included in your first commit.\n\n---\n\n### You are all set\n\nOnce initialized, start your sessions using Codex in your CLI and PromptVC will capture prompt-by-prompt changes."
       }
     ],
     "commands": [
@@ -128,6 +135,21 @@
         "command": "promptvc.showPromptView",
         "title": "Flat Prompt View",
         "icon": "$(list-flat)"
+      },
+      {
+        "command": "promptvc.copyInstallCommand",
+        "title": "Copy Install Command",
+        "icon": "$(clippy)"
+      },
+      {
+        "command": "promptvc.copyConfigCommand",
+        "title": "Copy Config Command",
+        "icon": "$(clippy)"
+      },
+      {
+        "command": "promptvc.copyInitCommand",
+        "title": "Copy Init Command",
+        "icon": "$(clippy)"
       }
     ],
     "menus": {
@@ -197,12 +219,16 @@
     "clean": "rm -rf dist",
     "dev": "tsc --watch",
     "typecheck": "tsc --noEmit",
-    "package": "vsce package"
-  },
-  "dependencies": {
-    "@promptvc/types": "workspace:*"
+    "package": "vsce package --no-dependencies",
+    "vscode:prepublish": "pnpm run build",
+    "package:vsix": "pnpm run build && vsce package --no-dependencies",
+    "publish": "vsce publish --no-dependencies",
+    "publish:patch": "vsce publish patch --no-dependencies",
+    "publish:minor": "vsce publish minor --no-dependencies",
+    "publish:major": "vsce publish major --no-dependencies"
   },
   "devDependencies": {
+    "@promptvc/types": "workspace:*",
     "@types/node": "^20.10.6",
     "@types/vscode": "^1.80.0",
     "@vscode/vsce": "^2.22.0",

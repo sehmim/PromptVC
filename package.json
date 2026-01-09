@@ -1,6 +1,6 @@
 {
   "name": "promptvc",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Version control for AI prompts - track, version, and visualize your AI-assisted coding sessions",
   "workspaces": [
@@ -12,7 +12,13 @@
     "clean": "pnpm -r clean && rm -rf node_modules",
     "dev": "pnpm -r --parallel dev",
     "lint": "pnpm -r lint",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm -r typecheck",
+    "package:vscode": "pnpm --filter promptvc-vscode package:vsix",
+    "publish:vscode": "pnpm --filter promptvc-vscode publish",
+    "publish:vscode:patch": "pnpm --filter promptvc-vscode publish:patch",
+    "publish:vscode:minor": "pnpm --filter promptvc-vscode publish:minor",
+    "publish:vscode:major": "pnpm --filter promptvc-vscode publish:major",
+    "publish:cli": "pnpm --filter promptvc publish --no-git-checks"
   },
   "devDependencies": {
     "typescript": "^5.3.3"

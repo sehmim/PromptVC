@@ -1,6 +1,6 @@
 {
   "name": "promptvc",
-  "version": "0.1.0",
+  "version": "0.1.4",
   "description": "CLI tool to wrap AI assistants and log prompts/diffs",
   "homepage": "https://v0-prompt-version-control-pi.vercel.app/",
   "repository": {
@@ -25,17 +25,17 @@
     "build": "tsc",
     "clean": "rm -rf dist",
     "dev": "tsc --watch",
-    "prepublishOnly": "npm run build",
+    "prepublishOnly": "pnpm run build",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@promptvc/types": "workspace:*",
     "kleur": "^4.1.5",
     "commander": "^11.1.0",
     "simple-git": "^3.22.0",
     "uuid": "^9.0.1"
   },
   "devDependencies": {
+    "@promptvc/types": "workspace:*",
     "@types/node": "^20.10.6",
     "@types/uuid": "^9.0.7",
     "typescript": "^5.3.3"
