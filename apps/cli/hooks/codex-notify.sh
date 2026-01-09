@@ -20,6 +20,7 @@ LAST_PROMPT_FILE="$PROMPTVC_DIR/last_prompt_count"
 LAST_SESSION_FILE="$PROMPTVC_DIR/last_session_file"
 TEMP_PROMPTS_FILE="$PROMPTVC_DIR/temp_prompts.json"
 SETTINGS_FILE="$PROMPTVC_DIR/settings.json"
+LAST_GIT_STATE_FILE="$PROMPTVC_DIR/last_git_state.json"
 
 # Create .promptvc directory if it doesn't exist
 mkdir -p "$PROMPTVC_DIR"
@@ -86,6 +87,8 @@ NEW_SESSION="false"
 if [ "$LATEST_SESSION" != "$PREV_SESSION" ]; then
     echo "0" > "$LAST_PROMPT_FILE"
     echo "$LATEST_SESSION" > "$LAST_SESSION_FILE"
+    # Reset git state for new session to start fresh
+    rm -f "$LAST_GIT_STATE_FILE"
     NEW_SESSION="true"
 fi
 
@@ -157,14 +160,73 @@ NEW_PROMPTS=$(echo "$FILTERED_PROMPTS" | jq ".[$LAST_PROMPT_COUNT:]" 2>/dev/null
 
 # Capture current git state
 GIT_HASH=$(git rev-parse HEAD 2>/dev/null || echo "")
-GIT_DIFF=$(git diff 2>/dev/null || echo "")
-CHANGED_FILES_RAW=$(git diff --name-only 2>/dev/null || echo "")
 
-# Build files array as JSON
-if [ -z "$CHANGED_FILES_RAW" ]; then
+# Load previous git state to calculate incremental changes
+PREV_STATE="{}"
+if [ -f "$LAST_GIT_STATE_FILE" ]; then
+    PREV_STATE=$(cat "$LAST_GIT_STATE_FILE" 2>/dev/null || echo "{}")
+fi
+
+# Get all currently changed files
+ALL_CHANGED_FILES=$(git diff --name-only 2>/dev/null || echo "")
+
+# Build current state: map of file -> checksum
+CURRENT_STATE="{}"
+if [ -n "$ALL_CHANGED_FILES" ]; then
+    while IFS= read -r file; do
+        if [ -f "$REPO_DIR/$file" ]; then
+            # Calculate checksum of current file content
+            CHECKSUM=$(git hash-object "$REPO_DIR/$file" 2>/dev/null || echo "")
+            if [ -n "$CHECKSUM" ]; then
+                CURRENT_STATE=$(echo "$CURRENT_STATE" | jq --arg file "$file" --arg sum "$CHECKSUM" '. + {($file): $sum}')
+            fi
+        fi
+    done <<< "$ALL_CHANGED_FILES"
+fi
+
+# Identify newly changed files (files that are new or have different checksums)
+NEW_CHANGED_FILES=""
+if [ "$PREV_STATE" = "{}" ]; then
+    # First run - all changed files are new
+    NEW_CHANGED_FILES="$ALL_CHANGED_FILES"
+else
+    # Compare current state with previous state
+    while IFS= read -r file; do
+        if [ -z "$file" ]; then
+            continue
+        fi
+        CURRENT_SUM=$(echo "$CURRENT_STATE" | jq -r --arg file "$file" '.[$file] // ""')
+        PREV_SUM=$(echo "$PREV_STATE" | jq -r --arg file "$file" '.[$file] // ""')
+
+        # Include file if it's new or checksum changed
+        if [ "$CURRENT_SUM" != "$PREV_SUM" ]; then
+            if [ -z "$NEW_CHANGED_FILES" ]; then
+                NEW_CHANGED_FILES="$file"
+            else
+                NEW_CHANGED_FILES="$NEW_CHANGED_FILES"$'\n'"$file"
+            fi
+        fi
+    done <<< "$ALL_CHANGED_FILES"
+fi
+
+# Generate diff only for newly changed files
+if [ -z "$NEW_CHANGED_FILES" ]; then
+    GIT_DIFF=""
+    CHANGED_FILES_RAW=""
     FILES_ARRAY="[]"
 else
-    FILES_ARRAY=$(echo "$CHANGED_FILES_RAW" | jq -R -s 'split("\n") | map(select(length > 0))')
+    # Create array of files for git diff
+    FILE_ARGS=""
+    while IFS= read -r file; do
+        if [ -n "$file" ]; then
+            FILE_ARGS="$FILE_ARGS $file"
+        fi
+    done <<< "$NEW_CHANGED_FILES"
+
+    # Generate diff only for these files
+    GIT_DIFF=$(git diff -- $FILE_ARGS 2>/dev/null || echo "")
+    CHANGED_FILES_RAW="$NEW_CHANGED_FILES"
+    FILES_ARRAY=$(echo "$NEW_CHANGED_FILES" | jq -R -s 'split("\n") | map(select(length > 0))')
 fi
 
 # Escape diff for JSON
@@ -277,6 +339,9 @@ if [ "$NEW_ENTRIES" != "[]" ]; then
 
     # Update last prompt count
     echo "$CURRENT_PROMPT_COUNT" > "$LAST_PROMPT_FILE"
+
+    # Save current git state for next incremental diff
+    echo "$CURRENT_STATE" > "$LAST_GIT_STATE_FILE"
 fi
 
 # Clean up
