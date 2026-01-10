@@ -23,7 +23,7 @@ export default function SessionPage({
   useEffect(() => {
     const loadedSession = SessionStorage.getSession(resolvedParams.id);
     if (!loadedSession) {
-      router.push('/');
+      router.push('/session');
       return;
     }
     setSession(loadedSession);

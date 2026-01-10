@@ -27,7 +27,7 @@ export function Sidebar() {
         {/* Header */}
         <div className="p-4 border-b border-gray-300 dark:border-gray-700">
           <div className="flex items-center justify-between">
-            <Link href="/" className="flex items-center gap-2">
+            <Link href="/session" className="flex items-center gap-2">
               <svg
                 className="w-6 h-6 text-blue-600"
                 fill="none"
