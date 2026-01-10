@@ -1,0 +1,85 @@
+@import "tailwindcss";
+@import "highlight.js/styles/github-dark.css";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* Diff viewer styles */
+.diff-line-addition {
+  background-color: rgba(34, 197, 94, 0.1);
+}
+
+.diff-line-addition .line-indicator {
+  color: rgb(34, 197, 94);
+}
+
+.diff-line-deletion {
+  background-color: rgba(239, 68, 68, 0.1);
+}
+
+.diff-line-deletion .line-indicator {
+  color: rgb(239, 68, 68);
+}
+
+.diff-line-context {
+  background-color: transparent;
+}
+
+.dark .diff-line-addition {
+  background-color: rgba(34, 197, 94, 0.15);
+}
+
+.dark .diff-line-deletion {
+  background-color: rgba(239, 68, 68, 0.15);
+}
+
+/* Syntax highlighting overrides */
+.hljs {
+  background: transparent !important;
+  padding: 0 !important;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+.dark ::-webkit-scrollbar-track {
+  background: #1f2937;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}

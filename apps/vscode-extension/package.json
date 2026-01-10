@@ -150,6 +150,11 @@
         "command": "promptvc.copyInitCommand",
         "title": "Copy Init Command",
         "icon": "$(clippy)"
+      },
+      {
+        "command": "promptvc.downloadSessions",
+        "title": "Download Sessions",
+        "icon": "$(cloud-download)"
       }
     ],
     "menus": {
@@ -187,6 +192,11 @@
         {
           "command": "promptvc.showSessionView",
           "when": "view == promptvcSessions && promptvc.viewMode == 'prompt'",
+          "group": "navigation"
+        },
+        {
+          "command": "promptvc.downloadSessions",
+          "when": "view == promptvcSessions",
           "group": "navigation"
         }
       ],

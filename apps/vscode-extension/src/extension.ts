@@ -189,12 +189,19 @@ function setNotifySoundEnabled(repoRoot: string | null, enabled: boolean): boole
 }
 
 function getCodexIconUri(extensionUri: vscode.Uri): vscode.Uri | null {
-  const iconUri = vscode.Uri.joinPath(extensionUri, 'media', 'openai.svg');
-  if (!fs.existsSync(iconUri.fsPath)) {
-    return null;
+  const assetIconPath = path.join(extensionUri.fsPath, '..', '..', 'assets', 'openai.svg');
+  const candidates = [
+    vscode.Uri.file(assetIconPath),
+    vscode.Uri.joinPath(extensionUri, 'media', 'openai.svg'),
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate.fsPath)) {
+      return candidate;
+    }
   }
 
-  return iconUri;
+  return null;
 }
 
 /**
@@ -937,6 +944,81 @@ interface SplitRow {
   right?: DiffLine;
 }
 
+function decodeDiffEscape(char: string): string {
+  switch (char) {
+    case 'n':
+      return '\n';
+    case 'r':
+      return '\r';
+    case 't':
+      return '\t';
+    case '"':
+      return '"';
+    case '\\':
+      return '\\';
+    default:
+      return char;
+  }
+}
+
+function stripDiffPrefix(value: string): string {
+  if (value.startsWith('a/') || value.startsWith('b/')) {
+    return value.slice(2);
+  }
+  return value;
+}
+
+function parseDiffHeader(line: string): { oldPath: string; newPath: string } | null {
+  if (!line.startsWith('diff --git ')) {
+    return null;
+  }
+
+  const remainder = line.slice('diff --git '.length);
+  const parts: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  let isEscaped = false;
+
+  for (let i = 0; i < remainder.length; i++) {
+    const char = remainder[i];
+    if (isEscaped) {
+      current += decodeDiffEscape(char);
+      isEscaped = false;
+      continue;
+    }
+    if (char === '\\') {
+      isEscaped = true;
+      continue;
+    }
+    if (char === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+    if (char === ' ' && !inQuotes) {
+      if (current.length > 0) {
+        parts.push(current);
+        current = '';
+      }
+      continue;
+    }
+    current += char;
+  }
+
+  if (current.length > 0) {
+    parts.push(current);
+  }
+
+  if (parts.length < 2) {
+    return null;
+  }
+
+  const [oldPath, newPath] = parts;
+  return {
+    oldPath: stripDiffPrefix(oldPath),
+    newPath: stripDiffPrefix(newPath),
+  };
+}
+
 function parseDiff(diffText: string): FileDiff[] {
   if (!diffText || diffText.trim() === '') {
     return [];
@@ -961,12 +1043,15 @@ function parseDiff(diffText: string): FileDiff[] {
         files.push(currentFile);
       }
 
-      const match = line.match(/diff --git a\/(.*?) b\/(.*?)$/);
-      if (match) {
+      currentFile = null;
+      currentHunk = null;
+
+      const header = parseDiffHeader(line);
+      if (header) {
         currentFile = {
-          fileName: match[2],
-          oldPath: match[1],
-          newPath: match[2],
+          fileName: header.newPath,
+          oldPath: header.oldPath,
+          newPath: header.newPath,
           hunks: [],
           additions: 0,
           deletions: 0,
@@ -1250,6 +1335,17 @@ function renderFilesChangedHeading(label: string, count: number): string {
   `;
 }
 
+function resolveFilesFromDiff(files: string[] | undefined, parsedDiff: FileDiff[]): string[] {
+  const diffFiles = parsedDiff.map(file => file.fileName).filter(Boolean);
+  if (diffFiles.length > 0) {
+    return Array.from(new Set(diffFiles));
+  }
+  if (!files) {
+    return [];
+  }
+  return Array.from(new Set(files));
+}
+
 function renderFilesChangedListItems(files: string[]): string {
   return files.map(file => {
     const escapedFile = escapeHtml(file);
@@ -1296,6 +1392,7 @@ function getPromptWebviewContent(promptChange: PromptChange, focusFile?: string)
   const parsedDiff = parseDiff(promptChange.diff);
   const totalAdditions = parsedDiff.reduce((sum, file) => sum + file.additions, 0);
   const totalDeletions = parsedDiff.reduce((sum, file) => sum + file.deletions, 0);
+  const diffFiles = resolveFilesFromDiff(promptChange.files, parsedDiff);
 
   const prDiffHtml = parsedDiff.length > 0
     ? parsedDiff.map((file, index) => generateFileDiffHtml(file, index)).join('')
@@ -1305,7 +1402,7 @@ function getPromptWebviewContent(promptChange: PromptChange, focusFile?: string)
     ? parsedDiff.map((file, index) => generateFileDiffSplitHtml(file, index)).join('')
     : `<div class="no-diff">No changes to display</div>`;
 
-  const filesSectionHtml = renderFilesChangedSection(promptChange.files, {
+  const filesSectionHtml = renderFilesChangedSection(diffFiles, {
     emptyMessage: 'No files changed',
   });
 
@@ -1324,25 +1421,10 @@ function getPromptWebviewContent(promptChange: PromptChange, focusFile?: string)
 
   const bodyHtml = `
     <div class="section">
-        <h2>Prompt Summary</h2>
-        <div class="metadata">
-            <div class="metadata-label">Time</div>
-            <div class="metadata-value">${escapeHtml(formattedTimestamp)}</div>
-            <div class="metadata-label">Hash</div>
-            <div class="metadata-value">${hashDisplay}</div>
-            <div class="metadata-label">Files</div>
-            <div class="metadata-value">${promptChange.files.length}</div>
-            <div class="metadata-label">Diff</div>
-            <div class="metadata-value">
-                <span class="diff-stats-additions">+${totalAdditions}</span>
-                <span class="diff-stats-deletions">-${totalDeletions}</span>
-            </div>
-        </div>
-
         <h3>Prompt</h3>
         <pre class="prompt-block">${escapeHtml(promptChange.prompt)}</pre>
 
-        ${renderFilesChangedHeading('Files Changed', promptChange.files.length)}
+        ${renderFilesChangedHeading('Files Changed', diffFiles.length)}
         ${filesSectionHtml}
 
         <h3>Prompt Diff</h3>
@@ -1372,16 +1454,17 @@ function getWebviewContent(session: PromptSession): string {
     perPromptHtml = `
       <div class="section">
         ${session.perPromptChanges.map((pc, index) => {
-          const filesSectionHtml = renderFilesChangedSection(pc.files, {
-            compact: true,
-            emptyMessage: 'No files changed',
-          });
           const parsedPromptDiff = parseDiff(pc.diff);
+          const promptFiles = resolveFilesFromDiff(pc.files, parsedPromptDiff);
           const totalAdditions = parsedPromptDiff.reduce((sum, file) => sum + file.additions, 0);
           const totalDeletions = parsedPromptDiff.reduce((sum, file) => sum + file.deletions, 0);
           const promptDiffHtml = parsedPromptDiff.length > 0
             ? parsedPromptDiff.map((file, fileIndex) => generateFileDiffHtml(file, fileIndex)).join('')
             : `<div class="no-diff">No changes</div>`;
+          const promptFilesSectionHtml = renderFilesChangedSection(promptFiles, {
+            compact: true,
+            emptyMessage: 'No files changed',
+          });
 
           return `
             <div class="prompt-change">
@@ -1395,8 +1478,8 @@ function getWebviewContent(session: PromptSession): string {
               </div>
               <div class="prompt-text">${escapeHtml(pc.prompt)}</div>
               <div class="files-list">
-                <div class="files-list-label">Files (${pc.files.length})</div>
-                ${filesSectionHtml}
+                <div class="files-list-label">Files (${promptFiles.length})</div>
+                ${promptFilesSectionHtml}
               </div>
               <details open>
                 <summary>View Changes</summary>
@@ -1411,12 +1494,12 @@ function getWebviewContent(session: PromptSession): string {
     `;
   }
 
-  const filesSectionHtml = renderFilesChangedSection(session.files, {
-    emptyMessage: 'No files changed',
-  });
-
   // Parse and generate PR-style diff
   const parsedDiff = parseDiff(session.diff);
+  const sessionFiles = resolveFilesFromDiff(session.files, parsedDiff);
+  const filesSectionHtml = renderFilesChangedSection(sessionFiles, {
+    emptyMessage: 'No files changed',
+  });
   const prDiffHtml = parsedDiff.length > 0
     ? parsedDiff.map((file, index) => generateFileDiffHtml(file, index)).join('')
     : `<div class="no-diff">No changes to display</div>`;
@@ -1434,7 +1517,7 @@ function getWebviewContent(session: PromptSession): string {
           : `<pre class="prompt-block">${escapeHtml(session.prompt)}</pre>`
         }
 
-        ${renderFilesChangedHeading('All Files Changed', session.files.length)}
+        ${renderFilesChangedHeading('All Files Changed', sessionFiles.length)}
         ${filesSectionHtml}
 
         <h3>Complete Diff</h3>
@@ -2468,6 +2551,58 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.commands.registerCommand('promptvc.copyInitCommand', () => {
         vscode.env.clipboard.writeText('promptvc init');
         vscode.window.showInformationMessage('Copied: promptvc init');
+      })
+    );
+
+    context.subscriptions.push(
+      vscode.commands.registerCommand('promptvc.downloadSessions', async () => {
+        console.log('PromptVC: Downloading sessions');
+
+        const sessionsFilePath = promptSessionsProvider['sessionsFilePath'];
+
+        if (!sessionsFilePath || !fs.existsSync(sessionsFilePath)) {
+          vscode.window.showErrorMessage('PromptVC: No sessions found. Initialize PromptVC first.');
+          return;
+        }
+
+        try {
+          // Read the sessions file
+          const sessionsData = fs.readFileSync(sessionsFilePath, 'utf-8');
+
+          // Prompt user for save location
+          const defaultFilename = `promptvc-sessions-${new Date().toISOString().split('T')[0]}.json`;
+          const uri = await vscode.window.showSaveDialog({
+            defaultUri: vscode.Uri.file(path.join(require('os').homedir(), 'Downloads', defaultFilename)),
+            filters: {
+              'JSON Files': ['json'],
+              'All Files': ['*']
+            },
+            saveLabel: 'Download Sessions'
+          });
+
+          if (uri) {
+            // Write to the selected location
+            fs.writeFileSync(uri.fsPath, sessionsData, 'utf-8');
+
+            const action = await vscode.window.showInformationMessage(
+              `Sessions downloaded to: ${path.basename(uri.fsPath)}`,
+              'Open File',
+              'Open Folder',
+              'Open Web Viewer'
+            );
+
+            if (action === 'Open File') {
+              await vscode.commands.executeCommand('vscode.open', uri);
+            } else if (action === 'Open Folder') {
+              await vscode.commands.executeCommand('revealFileInOS', uri);
+            } else if (action === 'Open Web Viewer') {
+              await vscode.env.openExternal(vscode.Uri.parse('https://promptvc-viewer.vercel.app'));
+            }
+          }
+        } catch (error) {
+          console.error('PromptVC: Error downloading sessions:', error);
+          vscode.window.showErrorMessage(`Failed to download sessions: ${error}`);
+        }
       })
     );
 
