@@ -17,7 +17,7 @@ A lightweight, client-side web application for visualizing and managing PromptVC
 
 ### Prerequisites
 
-- Node.js 18+ and npm
+- Node.js 22+ and npm
 
 ### Installation
 
@@ -159,7 +159,7 @@ The app is a standard Next.js application and can be deployed to:
 - Netlify
 - AWS Amplify
 - Cloudflare Pages
-- Any platform supporting Node.js
+- Any platform supporting Node.js 22
 
 ## Data Privacy
 
