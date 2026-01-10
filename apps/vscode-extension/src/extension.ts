@@ -204,6 +204,8 @@ function getCodexIconUri(extensionUri: vscode.Uri): vscode.Uri | null {
   return null;
 }
 
+const LOCAL_WEBVIEW_URL = 'http://localhost:3000/session';
+
 /**
  * TreeItem representing a file changed in a prompt
  */
@@ -857,16 +859,6 @@ function escapeHtml(text: string): string {
     .replace(/'/g, '&#039;');
 }
 
-function stripDiffPrefix(fileName: string): string {
-  if (fileName.startsWith('a/')) {
-    return fileName.slice(2);
-  }
-  if (fileName.startsWith('b/')) {
-    return fileName.slice(2);
-  }
-  return fileName;
-}
-
 function resolveFilePath(repoRoot: string | null, fileName: string): string | null {
   const cleaned = stripDiffPrefix(fileName);
   if (path.isAbsolute(cleaned)) {
@@ -878,7 +870,12 @@ function resolveFilePath(repoRoot: string | null, fileName: string): string | nu
   return path.join(repoRoot, cleaned);
 }
 
-async function openFileAtLine(fileName: string, lineNumber: number | undefined, repoRoot: string | null): Promise<void> {
+async function openFileAtLine(
+  fileName: string,
+  lineNumber: number | undefined,
+  repoRoot: string | null,
+  options?: { viewColumn?: vscode.ViewColumn; preserveFocus?: boolean }
+): Promise<void> {
   const filePath = resolveFilePath(repoRoot, fileName);
   if (!filePath) {
     vscode.window.showErrorMessage('PromptVC: No workspace folder found.');
@@ -892,7 +889,11 @@ async function openFileAtLine(fileName: string, lineNumber: number | undefined, 
   const targetLine = Number.isFinite(lineNumber) && lineNumber && lineNumber > 0 ? lineNumber : 1;
   const position = new vscode.Position(targetLine - 1, 0);
   const document = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
-  const editor = await vscode.window.showTextDocument(document, { preview: true });
+  const editor = await vscode.window.showTextDocument(document, {
+    preview: true,
+    viewColumn: options?.viewColumn,
+    preserveFocus: options?.preserveFocus ?? false,
+  });
   editor.selection = new vscode.Selection(position, position);
   editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
 }
@@ -904,11 +905,14 @@ function registerWebviewOpenFileHandler(panel: vscode.WebviewPanel, repoRoot: st
     }
     const fileName = typeof message.fileName === 'string' ? message.fileName : '';
     const lineNumber = typeof message.lineNumber === 'number' ? message.lineNumber : undefined;
+    const openInSplit = message.openInSplit === true;
     if (!fileName) {
       return;
     }
     try {
-      await openFileAtLine(fileName, lineNumber, repoRoot);
+      await openFileAtLine(fileName, lineNumber, repoRoot, {
+        viewColumn: openInSplit ? vscode.ViewColumn.Beside : undefined,
+      });
     } catch (error) {
       vscode.window.showErrorMessage(`PromptVC: Failed to open file: ${error}`);
     }
@@ -1559,19 +1563,25 @@ function getWebviewContentTemplate(
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <style>
         :root {
-            --promptvc-diff-border: var(--vscode-diffEditor-border, var(--vscode-panel-border));
-            --promptvc-diff-unchanged-bg: var(--vscode-diffEditor-unchangedCodeBackground, var(--vscode-editor-background));
-            --promptvc-diff-hunk-bg: var(--vscode-diffEditor-unchangedRegionBackground, var(--vscode-peekViewEditor-background));
-            --promptvc-diff-added-bg: var(--vscode-diffEditor-insertedLineBackground, var(--vscode-diffEditor-insertedTextBackground));
-            --promptvc-diff-removed-bg: var(--vscode-diffEditor-removedLineBackground, var(--vscode-diffEditor-removedTextBackground));
-            --promptvc-diff-added-fg: var(--vscode-gitDecoration-addedResourceForeground);
-            --promptvc-diff-removed-fg: var(--vscode-gitDecoration-deletedResourceForeground);
+            --promptvc-diff-border: var(--vscode-panel-border, rgba(128, 128, 128, 0.2));
+            --promptvc-diff-border-light: rgba(128, 128, 128, 0.1);
+            --promptvc-diff-unchanged-bg: var(--vscode-editor-background);
+            --promptvc-diff-hunk-bg: var(--vscode-peekViewEditor-background, rgba(128, 128, 128, 0.05));
+            --promptvc-diff-added-bg: rgba(46, 160, 67, 0.15);
+            --promptvc-diff-added-bg-subtle: rgba(46, 160, 67, 0.08);
+            --promptvc-diff-removed-bg: rgba(248, 81, 73, 0.15);
+            --promptvc-diff-removed-bg-subtle: rgba(248, 81, 73, 0.08);
+            --promptvc-diff-added-fg: #3fb950;
+            --promptvc-diff-removed-fg: #f85149;
+            --promptvc-diff-added-border: #3fb950;
+            --promptvc-diff-removed-border: #f85149;
             --promptvc-editor-bg: var(--vscode-editor-background);
             --promptvc-editor-border: var(--vscode-editorWidget-border, var(--vscode-panel-border));
-            --promptvc-editor-gutter-bg: var(--vscode-editorGutter-background);
-            --promptvc-editor-gutter-fg: var(--vscode-editorLineNumber-foreground);
-            --promptvc-editor-line-highlight: var(--vscode-editor-lineHighlightBackground, rgba(128, 128, 128, 0.12));
-            --promptvc-editor-shadow: var(--vscode-widget-shadow, rgba(0, 0, 0, 0.2));
+            --promptvc-editor-gutter-bg: transparent;
+            --promptvc-editor-gutter-fg: var(--vscode-editorLineNumber-foreground, rgba(128, 128, 128, 0.6));
+            --promptvc-editor-line-highlight: rgba(128, 128, 128, 0.08);
+            --promptvc-file-header-bg: var(--vscode-editorGroupHeader-tabsBackground, rgba(128, 128, 128, 0.05));
+            --promptvc-file-header-hover: rgba(128, 128, 128, 0.12);
         }
         body {
             font-family: var(--vscode-font-family);
@@ -1835,12 +1845,14 @@ function getWebviewContentTemplate(
         details[open] summary {
             margin-bottom: 10px;
         }
-        /* PR-style diff viewer */
+        /* PR-style diff viewer - GitHub-inspired */
         .file-diff {
-            margin: 20px 0;
+            margin: 16px 0;
             border: 1px solid var(--promptvc-diff-border);
             border-radius: 6px;
             overflow: hidden;
+            background-color: var(--promptvc-diff-unchanged-bg);
+            transition: border-color 0.2s ease;
         }
         .file-diff[open] {
             border-bottom: 1px solid var(--promptvc-diff-border);
@@ -1856,17 +1868,19 @@ function getWebviewContentTemplate(
             position: sticky;
             top: 0;
             z-index: 10;
-            background-color: var(--vscode-editorGroupHeader-tabsBackground, var(--vscode-editor-background));
-            padding: 12px 16px;
+            background-color: var(--promptvc-file-header-bg);
+            padding: 8px 16px;
             display: flex;
             justify-content: space-between;
             align-items: center;
             font-weight: 600;
+            font-size: 13px;
             user-select: none;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+            transition: background-color 0.2s ease;
+            border-bottom: 1px solid var(--promptvc-diff-border-light);
         }
         .file-diff-header:hover {
-            background-color: var(--vscode-list-hoverBackground);
+            background-color: var(--promptvc-file-header-hover);
         }
         .file-header-content {
             display: flex;
@@ -1882,31 +1896,36 @@ function getWebviewContentTemplate(
             flex-shrink: 0;
         }
         .file-diff.viewed .file-diff-header {
-            opacity: 0.6;
+            opacity: 0.5;
         }
         .file-diff.viewed .file-name {
             text-decoration: line-through;
             color: var(--vscode-descriptionForeground);
         }
         .file-diff.is-focused {
-            box-shadow: 0 0 0 2px var(--vscode-focusBorder);
+            outline: 2px solid var(--vscode-focusBorder);
+            outline-offset: -1px;
         }
         .file-diff.is-focused .file-diff-header {
             background-color: var(--vscode-list-focusBackground, var(--vscode-editorGroupHeader-tabsBackground));
         }
         .file-name {
             font-family: var(--vscode-editor-font-family);
-            font-size: 14px;
+            font-size: 13px;
+            font-weight: 600;
             flex: 1;
+            color: var(--vscode-foreground);
         }
         .diff-stats-additions {
             color: var(--promptvc-diff-added-fg);
             font-weight: 600;
+            font-size: 12px;
             margin-right: 8px;
         }
         .diff-stats-deletions {
             color: var(--promptvc-diff-removed-fg);
             font-weight: 600;
+            font-size: 12px;
         }
         .file-diff-content {
             background-color: var(--promptvc-diff-unchanged-bg);
@@ -1917,16 +1936,18 @@ function getWebviewContentTemplate(
         .hunk-header {
             background-color: var(--promptvc-diff-hunk-bg);
             color: var(--vscode-descriptionForeground);
-            padding: 6px 12px;
+            padding: 8px 16px;
             font-family: var(--vscode-editor-font-family);
-            font-size: var(--vscode-editor-font-size, 12px);
-            border-top: 1px solid var(--promptvc-diff-border);
+            font-size: 12px;
+            font-weight: 500;
+            border-top: 1px solid var(--promptvc-diff-border-light);
+            border-bottom: 1px solid var(--promptvc-diff-border-light);
         }
         .diff-table {
             width: 100%;
             border-collapse: collapse;
             font-family: var(--vscode-editor-font-family);
-            font-size: var(--vscode-editor-font-size, 12px);
+            font-size: 13px;
             line-height: 20px;
             color: var(--vscode-editor-foreground);
         }
@@ -1936,39 +1957,48 @@ function getWebviewContentTemplate(
         .diff-line {
             border: none;
         }
+        .diff-line td {
+            border: none;
+        }
+        .diff-line:hover .line-content {
+            background-color: var(--promptvc-editor-line-highlight) !important;
+        }
         .line-number {
-            width: 40px;
-            padding: 0 10px;
+            width: 50px;
+            min-width: 50px;
+            padding: 0 12px;
             text-align: right;
-            color: var(--vscode-editorLineNumber-foreground);
+            color: var(--promptvc-editor-gutter-fg);
             user-select: none;
             vertical-align: top;
-            font-size: 11px;
-            background-color: var(--vscode-editorGutter-background);
-            border-right: 1px solid var(--promptvc-diff-border);
+            font-size: 12px;
+            font-variant-numeric: tabular-nums;
+            background-color: var(--promptvc-editor-gutter-bg);
         }
         .line-indicator {
-            width: 20px;
-            padding: 0 8px;
+            width: 32px;
+            min-width: 32px;
+            padding: 0;
             text-align: center;
             user-select: none;
             vertical-align: top;
-            font-weight: bold;
-            background-color: var(--vscode-editorGutter-background);
-            border-right: 1px solid var(--promptvc-diff-border);
+            font-weight: 600;
+            font-size: 14px;
+            background-color: var(--promptvc-editor-gutter-bg);
         }
         .line-content {
             padding: 0;
             vertical-align: top;
             width: 100%;
+            position: relative;
         }
         .line-content pre {
             margin: 0;
-            padding: 0 12px;
+            padding: 0 16px;
             background: transparent;
             border: none;
             font-family: var(--vscode-editor-font-family);
-            font-size: var(--vscode-editor-font-size, 12px);
+            font-size: 13px;
             line-height: 20px;
             white-space: pre-wrap;
             word-wrap: break-word;
@@ -1978,83 +2008,109 @@ function getWebviewContentTemplate(
             width: 100%;
             border-collapse: collapse;
             font-family: var(--vscode-editor-font-family);
-            font-size: var(--vscode-editor-font-size, 12px);
+            font-size: 13px;
             line-height: 20px;
             table-layout: fixed;
             color: var(--vscode-editor-foreground);
         }
+        .split-row td {
+            border: none;
+        }
+        .split-row:hover .split-line-content {
+            background-color: var(--promptvc-editor-line-highlight) !important;
+        }
         .split-line-number {
-            width: 40px;
-            padding: 0 10px;
+            width: 50px;
+            min-width: 50px;
+            padding: 0 12px;
             text-align: right;
-            color: var(--vscode-editorLineNumber-foreground);
+            color: var(--promptvc-editor-gutter-fg);
             user-select: none;
             vertical-align: top;
-            font-size: 11px;
-            background-color: var(--vscode-editorGutter-background);
-            border-right: 1px solid var(--promptvc-diff-border);
+            font-size: 12px;
+            font-variant-numeric: tabular-nums;
+            background-color: var(--promptvc-editor-gutter-bg);
         }
         .split-line-indicator {
-            width: 20px;
-            padding: 0 8px;
+            width: 32px;
+            min-width: 32px;
+            padding: 0;
             text-align: center;
             user-select: none;
             vertical-align: top;
-            font-weight: bold;
-            background-color: var(--vscode-editorGutter-background);
-            border-right: 1px solid var(--promptvc-diff-border);
+            font-weight: 600;
+            font-size: 14px;
+            background-color: var(--promptvc-editor-gutter-bg);
         }
         .split-line-content {
             padding: 0;
             vertical-align: top;
-            width: calc((100% - 120px) / 2);
+            width: calc((100% - 164px) / 2);
+            position: relative;
+        }
+        .split-line-content:first-of-type {
+            border-right: 1px solid var(--promptvc-diff-border-light);
         }
         .split-line-content pre {
             margin: 0;
-            padding: 0 12px;
+            padding: 0 16px;
             background: transparent;
             border: none;
             font-family: var(--vscode-editor-font-family);
-            font-size: var(--vscode-editor-font-size, 12px);
+            font-size: 13px;
             line-height: 20px;
             white-space: pre-wrap;
             word-wrap: break-word;
             color: var(--vscode-editor-foreground);
         }
         .split-addition {
-            background-color: var(--promptvc-diff-added-bg);
+            background-color: var(--promptvc-diff-added-bg-subtle);
         }
         .split-deletion {
+            background-color: var(--promptvc-diff-removed-bg-subtle);
+        }
+        .split-addition.split-line-content {
+            background-color: var(--promptvc-diff-added-bg);
+        }
+        .split-deletion.split-line-content {
             background-color: var(--promptvc-diff-removed-bg);
         }
         .split-addition.split-line-indicator {
             color: var(--promptvc-diff-added-fg);
+            background-color: var(--promptvc-diff-added-bg-subtle);
         }
         .split-deletion.split-line-indicator {
             color: var(--promptvc-diff-removed-fg);
+            background-color: var(--promptvc-diff-removed-bg-subtle);
+        }
+        .split-addition.split-line-number {
+            background-color: var(--promptvc-diff-added-bg-subtle);
+        }
+        .split-deletion.split-line-number {
+            background-color: var(--promptvc-diff-removed-bg-subtle);
         }
         .diff-line-addition {
-            background-color: var(--promptvc-diff-added-bg);
+            background-color: transparent;
         }
         .diff-line-addition .line-indicator {
             color: var(--promptvc-diff-added-fg);
+            background-color: var(--promptvc-diff-added-bg-subtle);
         }
-        .diff-line-addition .line-number,
-        .diff-line-addition .line-indicator {
-            background-color: var(--vscode-editorGutter-addedBackground, var(--promptvc-diff-added-bg));
+        .diff-line-addition .line-number {
+            background-color: var(--promptvc-diff-added-bg-subtle);
         }
         .diff-line-addition .line-content {
             background-color: var(--promptvc-diff-added-bg);
         }
         .diff-line-deletion {
-            background-color: var(--promptvc-diff-removed-bg);
+            background-color: transparent;
         }
         .diff-line-deletion .line-indicator {
             color: var(--promptvc-diff-removed-fg);
+            background-color: var(--promptvc-diff-removed-bg-subtle);
         }
-        .diff-line-deletion .line-number,
-        .diff-line-deletion .line-indicator {
-            background-color: var(--vscode-editorGutter-deletedBackground, var(--promptvc-diff-removed-bg));
+        .diff-line-deletion .line-number {
+            background-color: var(--promptvc-diff-removed-bg-subtle);
         }
         .diff-line-deletion .line-content {
             background-color: var(--promptvc-diff-removed-bg);
@@ -2064,11 +2120,21 @@ function getWebviewContentTemplate(
         }
         .diff-line-context .line-indicator {
             color: var(--vscode-descriptionForeground);
+            font-weight: 400;
         }
         .no-diff {
             padding: 20px;
             text-align: center;
             color: var(--vscode-descriptionForeground);
+            font-size: 13px;
+        }
+
+        /* Improved visual polish */
+        .file-diff:first-child {
+            margin-top: 0;
+        }
+        .file-diff:last-child {
+            margin-bottom: 0;
         }
 
         /* Syntax highlighting overrides to match VS Code theme */
@@ -2307,7 +2373,7 @@ function getWebviewContentTemplate(
             });
         });
 
-        function handleOpenFileRequest(fileName, lineNumber) {
+        function handleOpenFileRequest(fileName, lineNumber, openInSplit) {
             if (!vscodeApi || !fileName) {
                 return;
             }
@@ -2315,6 +2381,7 @@ function getWebviewContentTemplate(
                 type: 'openFileAtLine',
                 fileName,
                 lineNumber,
+                openInSplit: openInSplit === true,
             });
         }
 
@@ -2336,7 +2403,7 @@ function getWebviewContentTemplate(
             if (!fileName || !Number.isFinite(lineNumber)) {
                 return;
             }
-            handleOpenFileRequest(fileName, lineNumber);
+            handleOpenFileRequest(fileName, lineNumber, true);
         });
 
         document.querySelectorAll('.file-diff-header').forEach(header => {
@@ -2353,7 +2420,7 @@ function getWebviewContentTemplate(
                 const fileName = fileNode.dataset.fileName;
                 const firstRow = fileNode.querySelector('tr[data-line-number]');
                 const lineNumber = firstRow ? Number(firstRow.dataset.lineNumber) : undefined;
-                handleOpenFileRequest(fileName, lineNumber);
+                handleOpenFileRequest(fileName, lineNumber, true);
             });
         });
 
@@ -2551,6 +2618,13 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.commands.registerCommand('promptvc.copyInitCommand', () => {
         vscode.env.clipboard.writeText('promptvc init');
         vscode.window.showInformationMessage('Copied: promptvc init');
+      })
+    );
+
+    context.subscriptions.push(
+      vscode.commands.registerCommand('promptvc.openLocalWebViewer', async () => {
+        console.log('PromptVC: Opening local web viewer');
+        await vscode.env.openExternal(vscode.Uri.parse(LOCAL_WEBVIEW_URL));
       })
     );
 

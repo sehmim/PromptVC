@@ -155,6 +155,11 @@
         "command": "promptvc.downloadSessions",
         "title": "Download Sessions",
         "icon": "$(cloud-download)"
+      },
+      {
+        "command": "promptvc.openLocalWebViewer",
+        "title": "Open Local Web Viewer",
+        "icon": "$(globe)"
       }
     ],
     "menus": {
@@ -196,6 +201,11 @@
         },
         {
           "command": "promptvc.downloadSessions",
+          "when": "view == promptvcSessions",
+          "group": "navigation"
+        },
+        {
+          "command": "promptvc.openLocalWebViewer",
           "when": "view == promptvcSessions",
           "group": "navigation"
         }
