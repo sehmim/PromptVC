@@ -109,7 +109,7 @@ export default function MarketingPage() {
                   Local-only sessions
                 </div>
                 <div className="flex items-center gap-2 rounded-full bg-white/70 px-3 py-1 shadow-sm">
-                  <img src="/openai.svg" alt="Codex provider" className="h-3 w-3" />
+                  <img src="/codex.svg" alt="Codex provider" className="h-3 w-3 p-0.5" />
                   Codex
                 </div>
                 <div className="flex items-center gap-2 rounded-full bg-white/70 px-3 py-1 shadow-sm">

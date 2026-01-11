@@ -159,7 +159,7 @@ export const runConfigCommand = async (): Promise<void> => {
     }
   } else {
     console.log(`  ${kleur.red('✗')} Codex not found (${getCodexDir()} does not exist)`);
-    console.log(`  ${kleur.yellow('→')} Install Codex from: https://www.codex.chat/`);
+    console.log(`  ${kleur.yellow('→')} Install Codex: npm i -g @openai/codex`);
   }
   console.log('');
   console.log(`${kleur.bold('Hook path:')} ${hookPathForConfig}`);

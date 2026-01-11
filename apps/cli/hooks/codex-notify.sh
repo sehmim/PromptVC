@@ -3,6 +3,9 @@
 # This script is called by Codex after each turn completes
 # Captures prompts AND git diffs per-prompt for detailed tracking
 
+# Codex may run hooks with a minimal PATH; include common locations (Homebrew, system bins)
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
+
 # Check if we're in a git repository and resolve the repo root
 if ! git rev-parse --git-dir > /dev/null 2>&1; then
     exit 0
@@ -70,11 +73,39 @@ trap 'play_notify_sound' EXIT
 LATEST_SESSION=$(find "$HOME/.codex/sessions" -name "rollout-*.jsonl" -type f -print0 2>/dev/null | \
     xargs -0 ls -t 2>/dev/null | head -1)
 
+USE_CODEX_HISTORY="false"
+CODEX_HISTORY_FILE="$HOME/.codex/history.jsonl"
+
+# Codex CLI versions may not write per-session JSONL files under ~/.codex/sessions.
+# Fall back to ~/.codex/history.jsonl (JSONL with {session_id, ts, text}).
 if [ ! -f "$LATEST_SESSION" ]; then
-    exit 0
+    if [ ! -f "$CODEX_HISTORY_FILE" ]; then
+        exit 0
+    fi
+    USE_CODEX_HISTORY="true"
 fi
 
-SESSION_ID=$(basename "$LATEST_SESSION" .jsonl)
+if [ "$USE_CODEX_HISTORY" = "true" ]; then
+    # Ensure jq is available (needed to parse history.jsonl and to write sessions.json)
+    if ! command -v jq > /dev/null 2>&1; then
+        exit 0
+    fi
+
+    # Use the session_id from the most recent history entry
+    SESSION_ID=$(tail -n 1 "$CODEX_HISTORY_FILE" 2>/dev/null | jq -r '.session_id // empty' 2>/dev/null)
+    if [ -z "$SESSION_ID" ]; then
+        exit 0
+    fi
+else
+    SESSION_ID=$(basename "$LATEST_SESSION" .jsonl)
+fi
+
+# Key used to detect when a new Codex session starts (file path for old Codex, session_id for new Codex)
+CURRENT_SESSION_KEY="$LATEST_SESSION"
+if [ "$USE_CODEX_HISTORY" = "true" ]; then
+    CURRENT_SESSION_KEY="$SESSION_ID"
+fi
+
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
 
@@ -84,9 +115,9 @@ if [ -f "$LAST_SESSION_FILE" ]; then
     PREV_SESSION=$(cat "$LAST_SESSION_FILE")
 fi
 NEW_SESSION="false"
-if [ "$LATEST_SESSION" != "$PREV_SESSION" ]; then
+if [ "$CURRENT_SESSION_KEY" != "$PREV_SESSION" ]; then
     echo "0" > "$LAST_PROMPT_FILE"
-    echo "$LATEST_SESSION" > "$LAST_SESSION_FILE"
+    echo "$CURRENT_SESSION_KEY" > "$LAST_SESSION_FILE"
     # Reset git state for new session to start fresh
     rm -f "$LAST_GIT_STATE_FILE"
     NEW_SESSION="true"
@@ -103,7 +134,10 @@ if ! echo "$SESSIONS_JSON" | jq -e . > /dev/null 2>&1; then
 fi
 
 if [ "$NEW_SESSION" = "true" ] && [ -n "$PREV_SESSION" ]; then
-    PREV_SESSION_ID=$(basename "$PREV_SESSION" .jsonl)
+    PREV_SESSION_ID="$PREV_SESSION"
+    if [[ "$PREV_SESSION" == *".jsonl"* ]]; then
+        PREV_SESSION_ID=$(basename "$PREV_SESSION" .jsonl)
+    fi
     if [ -n "$PREV_SESSION_ID" ]; then
         SESSIONS_JSON=$(echo "$SESSIONS_JSON" | jq \
             --arg prevId "$PREV_SESSION_ID" \
@@ -112,11 +146,17 @@ if [ "$NEW_SESSION" = "true" ] && [ -n "$PREV_SESSION" ]; then
     fi
 fi
 
-# Extract all user prompts as a JSON array
-# This preserves multi-line prompts as single entries
-cat "$LATEST_SESSION" | \
-    jq -R -s 'split("\n") | map(fromjson? | select(.type == "response_item" and .payload.role == "user") | .payload.content[0].text) | map(select(. != null))' \
-    > "$TEMP_PROMPTS_FILE" 2>/dev/null
+# Extract all user prompts as a JSON array (preserves multi-line prompts as single entries)
+if [ "$USE_CODEX_HISTORY" = "true" ]; then
+    jq --arg sid "$SESSION_ID" -n \
+        '[inputs | select(.session_id == $sid) | .text] | map(select(. != null))' \
+        "$CODEX_HISTORY_FILE" \
+        > "$TEMP_PROMPTS_FILE" 2>/dev/null
+else
+    cat "$LATEST_SESSION" | \
+        jq -R -s 'split("\n") | map(fromjson? | select(.type == "response_item" and .payload.role == "user") | .payload.content[0].text) | map(select(. != null))' \
+        > "$TEMP_PROMPTS_FILE" 2>/dev/null
+fi
 
 if [ ! -f "$TEMP_PROMPTS_FILE" ] || [ ! -s "$TEMP_PROMPTS_FILE" ]; then
     exit 0

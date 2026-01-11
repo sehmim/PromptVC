@@ -99,7 +99,7 @@ export function SessionList() {
 
   const getProviderIcon = (provider: string) => {
     if (provider === 'codex') {
-      return '/openai.svg';
+      return '/codex.svg';
     }
     return null;
   };
@@ -178,7 +178,7 @@ export function SessionList() {
                       <img
                         src={providerIcon}
                         alt={`${session.provider} icon`}
-                        className="w-3.5 h-3.5 flex-shrink-0"
+                        className="w-3.5 h-3.5 p-0.5 flex-shrink-0"
                       />
                     )}
                     <div className="flex-1 min-w-0">
