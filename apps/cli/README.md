@@ -4,7 +4,7 @@ Local-first, prompt-by-prompt diff tracking for AI coding sessions.
 
 ## Requirements
 
-- Node.js 18+
+- Node.js 22+ (use nvm: `nvm install 22 && nvm use 22`)
 - Git
 - Codex CLI
 - jq (required for per-prompt capture)

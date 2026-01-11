@@ -7,9 +7,33 @@ import kleur from 'kleur';
 import { renderLogo } from './branding';
 
 const getCodexConfigPath = (): string => path.join(os.homedir(), '.codex', 'config.toml');
+const getCodexDir = (): string => path.join(os.homedir(), '.codex');
 const getNotifyHookPath = (): string => path.resolve(__dirname, '..', 'hooks', 'codex-notify.sh');
 
 const isWindows = process.platform === 'win32';
+
+const isCodexInstalled = (): boolean => {
+  const codexDir = getCodexDir();
+  return fs.existsSync(codexDir);
+};
+
+const hasCodexConfig = (): boolean => {
+  const configPath = getCodexConfigPath();
+  return fs.existsSync(configPath);
+};
+
+const isCodexConfigured = (): boolean => {
+  const configPath = getCodexConfigPath();
+  if (!fs.existsSync(configPath)) {
+    return false;
+  }
+  try {
+    const content = fs.readFileSync(configPath, 'utf-8');
+    return /^\s*notify\s*=/m.test(content);
+  } catch {
+    return false;
+  }
+};
 
 const isGitBashOnWindows = (): boolean => {
   if (!isWindows) {
@@ -118,6 +142,26 @@ export const runConfigCommand = async (): Promise<void> => {
   console.log(kleur.bold().cyan('PromptVC Config'));
   console.log(renderLogo());
   console.log('');
+
+  // Check Codex installation status
+  const codexInstalled = isCodexInstalled();
+  const codexConfigured = isCodexConfigured();
+
+  console.log(`${kleur.bold('Codex status:')}`);
+  if (codexInstalled) {
+    console.log(`  ${kleur.green('✓')} Codex is installed (${getCodexDir()} found)`);
+    if (codexConfigured) {
+      console.log(`  ${kleur.green('✓')} Codex is already configured with PromptVC`);
+    } else if (hasCodexConfig()) {
+      console.log(`  ${kleur.yellow('○')} Codex config exists but PromptVC not configured`);
+    } else {
+      console.log(`  ${kleur.yellow('○')} Codex config not found, will be created`);
+    }
+  } else {
+    console.log(`  ${kleur.red('✗')} Codex not found (${getCodexDir()} does not exist)`);
+    console.log(`  ${kleur.yellow('→')} Install Codex from: https://www.codex.chat/`);
+  }
+  console.log('');
   console.log(`${kleur.bold('Hook path:')} ${hookPathForConfig}`);
   console.log(`${kleur.bold('Codex config:')} ${configPath}`);
 
@@ -131,9 +175,18 @@ export const runConfigCommand = async (): Promise<void> => {
     const updated = upsertNotifyHook(existing, hookPathForConfig);
     fs.writeFileSync(configPath, updated, 'utf-8');
     console.log('');
-    console.log(kleur.green('OK: updated Codex config.'));
+    if (codexConfigured) {
+      console.log(kleur.green('OK: Codex config verified (already configured).'));
+    } else {
+      console.log(kleur.green('OK: Codex config updated successfully.'));
+    }
+
+    if (!codexInstalled) {
+      console.log('');
+      console.log(kleur.yellow('Note: Codex installation not detected. Install Codex to use this integration.'));
+    }
     console.log('');
-    console.log(kleur.bgBlue('Run "promptvc init" to initialize Prompt Version Controle in your repository.'));
+    console.log(kleur.bgBlue('Run "promptvc init" to initialize Prompt Version Control in your repository.'));
 
   } catch (error) {
     console.log('');

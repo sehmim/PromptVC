@@ -136,6 +136,11 @@ Windows: run `promptvc` and `codex` from Git Bash and ensure `jq` is installed.
 
 ## Getting Started
 
+**Requirements:**
+- Node.js 22+ (use nvm: `nvm install 22 && nvm use 22`)
+- Git
+- jq (required for per-prompt capture)
+
 ```bash
 cd your-repo
 promptvc init

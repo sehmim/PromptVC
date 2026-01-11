@@ -31,8 +31,8 @@ importers:
         specifier: workspace:*
         version: link:../../shared/types
       '@types/node':
-        specifier: ^20.10.6
-        version: 20.19.27
+        specifier: ^22.0.0
+        version: 22.19.5
       '@types/uuid':
         specifier: ^9.0.7
         version: 9.0.8

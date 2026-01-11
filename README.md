@@ -26,7 +26,7 @@ PromptVC is a coding AI CLI visualization that records each prompt and shows wha
 
 Requirements:
 - Git
-- Node.js 18+ and pnpm
+- Node.js 22+ (use nvm: `nvm install 22 && nvm use 22`) and pnpm
 - VS Code 1.80+
 - Codex CLI
 - jq (required for per-prompt capture)
