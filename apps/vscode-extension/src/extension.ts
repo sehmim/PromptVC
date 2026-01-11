@@ -204,7 +204,7 @@ function getCodexIconUri(extensionUri: vscode.Uri): vscode.Uri | null {
   return null;
 }
 
-const LOCAL_WEBVIEW_URL = 'http://localhost:3000/session';
+const WEBVIEW_URL = 'https://prompt-vc.vercel.app/session';
 
 /**
  * TreeItem representing a file changed in a prompt
@@ -2623,8 +2623,8 @@ export function activate(context: vscode.ExtensionContext) {
 
     context.subscriptions.push(
       vscode.commands.registerCommand('promptvc.openLocalWebViewer', async () => {
-        console.log('PromptVC: Opening local web viewer');
-        await vscode.env.openExternal(vscode.Uri.parse(LOCAL_WEBVIEW_URL));
+        console.log('PromptVC: Opening web viewer');
+        await vscode.env.openExternal(vscode.Uri.parse(WEBVIEW_URL));
       })
     );
 
@@ -2670,7 +2670,7 @@ export function activate(context: vscode.ExtensionContext) {
             } else if (action === 'Open Folder') {
               await vscode.commands.executeCommand('revealFileInOS', uri);
             } else if (action === 'Open Web Viewer') {
-              await vscode.env.openExternal(vscode.Uri.parse('https://promptvc-viewer.vercel.app'));
+              await vscode.env.openExternal(vscode.Uri.parse(WEBVIEW_URL));
             }
           }
         } catch (error) {

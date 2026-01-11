@@ -30,7 +30,7 @@ program
       console.log(kleur.green('Get the Prompt Version Control VSCode extension to enhance your experience!'));
       console.log(kleur.blue('https://marketplace.visualstudio.com/items?itemName=your-extension-id'));
       console.log('');
-      console.log(kleur.green('Findout more at https://promptvc.dev'));
+      console.log(kleur.green('Findout more at https://prompt-vc.vercel.app'));
 
     } catch (error) {
       console.error('Error:', error);

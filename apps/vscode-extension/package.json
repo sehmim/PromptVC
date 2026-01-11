@@ -3,10 +3,10 @@
   "displayName": "PromptVC - Prompt Tracker & Version Control",
   "description": "LLM-agnostic prompt tracker and prompt version control with Git-style diffs. See exactly what code each prompt changed.",
   "icon": "media/logo.png",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "SehmimHaque",
   "license": "MIT",
-  "homepage": "https://v0-prompt-version-control-pi.vercel.app/",
+  "homepage": "https://prompt-vc.vercel.app/",
   "repository": {
     "type": "git",
     "url": "https://github.com/sehmim/PromptVC.git"
@@ -62,7 +62,7 @@
       {
         "view": "promptvcSessions",
         "when": "!promptvc.hasInit",
-        "contents": "# PromptVC - Prompt Tracker & Prompt Version Control\n\n> Git for prompts.\n\nPromptVC is an LLM-agnostic, local-first prompt tracker and prompt version control system. It shows you exactly what each prompt changed.\n\nWorks with any LLM via hooks (Codex today; Claude and Gemini soon).\n\n---\n\n## Getting Started\n\nFollow these steps to set up PromptVC:\n\n### 1) Install the CLI\n\n```bash\nnpm install -g promptvc\n```\n\n[Copy Install Command](command:promptvc.copyInstallCommand)\n\n### 2) Configure your AI assistant hook\n\n```bash\npromptvc config\n```\n\n[Copy Config Command](command:promptvc.copyConfigCommand)\n\n### 3) Initialize this repository\n\n```bash\npromptvc init\n```\n\n[Copy Init Command](command:promptvc.copyInitCommand)\n\n---\n\n### Important Note\n\nMake sure to start with a clean git session, or else old changes will be included in your first commit.\n\n---\n\n### You are all set\n\nOnce initialized, start your sessions using Codex in your CLI and PromptVC will capture prompt-by-prompt changes."
+        "contents": "## Getting Started\n\n**1. Install the CLI**\n\n`npm install -g promptvc` [Copy](command:promptvc.copyInstallCommand)\n\n**2. Configure your AI assistant**\n\n`promptvc config` [Copy](command:promptvc.copyConfigCommand)\n\n---\n\n## Usage\n\n**Initialize PromptVC in a git repository:**\n\n`promptvc init` [Copy](command:promptvc.copyInitCommand)\n\n**Important:** Ensure your git working directory is clean (no pending changes) before running `promptvc init`. Any uncommitted changes will be included in your first prompt capture.\n\nOnce initialized, this view will automatically update to show your prompt sessions and diffs as you work with your AI assistant!"
       }
     ],
     "commands": [
@@ -158,7 +158,7 @@
       },
       {
         "command": "promptvc.openLocalWebViewer",
-        "title": "Open Local Web Viewer",
+        "title": "Open Web Viewer",
         "icon": "$(globe)"
       }
     ],
