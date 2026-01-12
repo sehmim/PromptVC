@@ -3,7 +3,7 @@
   "displayName": "PromptVC - Prompt Tracker & Version Control",
   "description": "LLM-agnostic prompt tracker and prompt version control with Git-style diffs. See exactly what code each prompt changed.",
   "icon": "media/logo.png",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "publisher": "SehmimHaque",
   "license": "MIT",
   "homepage": "https://prompt-vc.vercel.app/",

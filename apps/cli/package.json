@@ -1,6 +1,6 @@
 {
   "name": "promptvc",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "CLI tool to wrap AI assistants and log prompts/diffs",
   "homepage": "https://prompt-vc.vercel.app/",
   "repository": {
