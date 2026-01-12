@@ -207,6 +207,7 @@ export async function main(): Promise<void> {
                 perPromptChanges = (sessionData as PromptChange[]).map((change) => ({
                   ...change,
                   prompt: redactSensitive(change.prompt),
+                  response: change.response ? redactSensitive(change.response) : undefined,
                   diff: redactSensitive(change.diff),
                 }));
                 capturedPrompts = perPromptChanges.map(pc => pc.prompt);

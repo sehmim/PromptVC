@@ -73,6 +73,7 @@ function redactPromptChange(change: PromptChange): PromptChange {
   return {
     ...change,
     prompt: redactSensitive(change.prompt),
+    response: change.response ? redactSensitive(change.response) : undefined,
     diff: redactSensitive(change.diff),
   };
 }

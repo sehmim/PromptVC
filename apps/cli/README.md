@@ -5,15 +5,16 @@ Local-first, prompt-by-prompt diff tracking for AI coding sessions.
 ## Requirements
 
 - Node.js 22+ (use nvm: `nvm install 22 && nvm use 22`)
+- npm 11.5.1 (set `PROMPTVC_EXPECTED_NPM_VERSION` to override)
 - Git
-- Codex CLI
-- jq (required for per-prompt capture)
+- Codex CLI 0.80.0 (set `PROMPTVC_EXPECTED_CODEX_VERSION` to override)
+- jq (optional; legacy hook fallback)
 - macOS/Linux
 - Windows: Git Bash required (run `promptvc` + `codex` in Git Bash)
 
 ### Windows notes
 
-Install `jq` (pick one):
+If the legacy shell hook fallback is used, install `jq` (pick one):
 
 ```bash
 winget install jqlang.jq
@@ -39,15 +40,20 @@ npm install -g promptvc
 promptvc config
 ```
 
-This command finds the installed notify hook and updates `~/.codex/config.toml`. If it cannot edit the file, it prints a ready-to-paste snippet.
+This command finds the installed notify hook, verifies Codex/npm versions, and updates `~/.codex/config.toml`. If it cannot edit the file, it prints a ready-to-paste snippet.
+
+If you need to bypass the version guard, set:
+
+```bash
+PROMPTVC_ALLOW_VERSION_MISMATCH=1
+```
 
 ### Manual setup
 
 Add to `~/.codex/config.toml`:
 
 ```toml
-[hooks]
-notify = "/absolute/path/to/promptvc/hooks/codex-notify.sh"
+notify = ["/absolute/path/to/promptvc/hooks/codex-notify.sh"]
 ```
 
 If installed globally via npm, the hook is typically at:
@@ -55,6 +61,14 @@ If installed globally via npm, the hook is typically at:
 ```bash
 $(npm root -g)/promptvc/hooks/codex-notify.sh
 ```
+
+## Version guard
+
+PromptVC checks Codex and npm versions during `promptvc config` and `promptvc init`.
+
+- Expected Codex: `0.80.0` (override with `PROMPTVC_EXPECTED_CODEX_VERSION`)
+- Expected npm: `11.5.1` (override with `PROMPTVC_EXPECTED_NPM_VERSION`)
+- Bypass the guard: `PROMPTVC_ALLOW_VERSION_MISMATCH=1`
 
 ## Usage
 
@@ -92,4 +106,4 @@ promptvc-codex
 ## Troubleshooting
 
 - If `promptvc` resolves to a Python shim, run `which promptvc` and ensure your npm global bin is ahead of pyenv on PATH.
-- Ensure `jq` is installed and available on PATH.
+- If you’re using the legacy shell hook fallback, ensure `jq` is installed and available on PATH.

@@ -154,6 +154,17 @@ export function SessionContent({ id }: { id: string }) {
           </div>
         </div>
 
+        {selectedPrompt.response ? (
+          <div className="mb-4">
+            <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
+              Response
+            </h2>
+            <div className="bg-gray-50 dark:bg-gray-800 p-3 rounded border border-gray-200 dark:border-gray-700 text-sm text-gray-900 dark:text-gray-100 whitespace-pre-wrap break-words max-h-[300px] overflow-y-auto">
+              {selectedPrompt.response}
+            </div>
+          </div>
+        ) : null}
+
         {/* Files Changed */}
         <div className="mb-4">
           <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">

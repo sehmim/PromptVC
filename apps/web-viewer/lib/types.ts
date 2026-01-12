@@ -3,6 +3,7 @@
  */
 export interface PromptChange {
   prompt: string;
+  response?: string;
   timestamp: string;
   hash: string;
   files: string[];

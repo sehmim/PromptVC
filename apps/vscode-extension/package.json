@@ -62,7 +62,12 @@
       {
         "view": "promptvcSessions",
         "when": "!promptvc.hasInit",
-        "contents": "## Getting Started\n\n**1. Install the CLI**\n\n`npm install -g promptvc` [Copy](command:promptvc.copyInstallCommand)\n\n**2. Configure your AI assistant**\n\n`promptvc config` [Copy](command:promptvc.copyConfigCommand)\n\n---\n\n## Usage\n\n**Initialize PromptVC in a git repository:**\n\n`promptvc init` [Copy](command:promptvc.copyInitCommand)\n\n**Important:** Ensure your git working directory is clean (no pending changes) before running `promptvc init`. Any uncommitted changes will be included in your first prompt capture.\n\nOnce initialized, this view will automatically update to show your prompt sessions and diffs as you work with your AI assistant!"
+        "contents": "## Getting Started\n\n**1. Install the CLI**\n\n`npm install -g promptvc` [Copy](command:promptvc.copyInstallCommand)\n\n**2. Configure your AI assistant**\n\n`promptvc config` [Copy](command:promptvc.copyConfigCommand)\n\n---\n\n## Usage\n\n**Initialize PromptVC in a git repository:**\n\n`promptvc init` [Copy](command:promptvc.copyInitCommand)\n\n**Important:** Ensure your git working directory is clean (no pending changes) before running `promptvc init`. Any uncommitted changes will be included in your first prompt capture.\n\nIf config/init blocks due to version mismatch, set `PROMPTVC_ALLOW_VERSION_MISMATCH=1`.\n\nOnce initialized, this view will automatically update to show your prompt sessions and diffs as you work with your AI assistant!"
+      },
+      {
+        "view": "promptvcSessions",
+        "when": "promptvc.hasInit && !promptvc.hasSessions",
+        "contents": "## Ready to Capture Prompts\n\nStart your vibe coding session on the CLI with Codex, Claude, or Gemini. Each prompt you send will appear here with prompt-by-prompt diffs.\n\nIf nothing shows up, run `promptvc config` and make sure your assistant is running inside this repo."
       }
     ],
     "commands": [

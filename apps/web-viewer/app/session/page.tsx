@@ -16,6 +16,11 @@ export default function SessionHome() {
             <p className="text-gray-600 dark:text-gray-400 mb-8">
               Upload your sessions to view prompt diffs
             </p>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mb-6">
+              If you do not see a <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">.promptvc</code> folder,
+              run <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">promptvc config</code> and
+              <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">promptvc init</code> in your repo.
+            </p>
 
             <div className="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6 text-left">
               <h2 className="font-semibold text-gray-900 dark:text-gray-100 mb-4">

@@ -2,6 +2,13 @@
 
 Local-first, prompt-by-prompt diff tracking for AI coding sessions.
 
+test readme
+
+## Test Title
+
+- testing
+- another test
+
 Website: https://v0-prompt-version-control-pi.vercel.app/
 
 PromptVC is a coding AI CLI visualization that records each prompt and shows what changed in your repo after every response, in VS Code and the terminal.
@@ -27,14 +34,18 @@ PromptVC is a coding AI CLI visualization that records each prompt and shows wha
 Requirements:
 - Git
 - Node.js 22+ (use nvm: `nvm install 22 && nvm use 22`) and pnpm
+- npm 11.5.1 (set `PROMPTVC_EXPECTED_NPM_VERSION` to override)
 - VS Code 1.80+
-- Codex CLI
-- jq (required for per-prompt capture)
+- Codex CLI 0.80.0 (set `PROMPTVC_EXPECTED_CODEX_VERSION` to override)
+- jq (optional; legacy hook fallback)
 - macOS/Linux
 - Windows: Git Bash required (run `promptvc` + `codex` in Git Bash)
 
 Windows notes:
-- Install `jq` (pick one): `winget install jqlang.jq`, `choco install jq`, or `scoop install jq`.
+- `jq` is only needed if Node isn’t available to the hook environment (legacy fallback). Install (pick one): `winget install jqlang.jq`, `choco install jq`, or `scoop install jq`.
+
+Version guard:
+- `promptvc config` and `promptvc init` warn and stop if Codex/npm don’t match the expected versions. Set `PROMPTVC_ALLOW_VERSION_MISMATCH=1` to bypass.
 
 1) Clone and install dependencies:
 ```bash
@@ -54,11 +65,15 @@ cd apps/cli
 pnpm link --global
 ```
 
-4) Enable the per-prompt notify hook (no wrapper required):
-Add to `~/.codex/config.toml`:
+4) Configure the Codex notify hook (recommended):
+```bash
+promptvc config
+```
+This verifies Codex/npm versions and writes the notify hook.
+
+Manual setup (if needed): add to `~/.codex/config.toml`:
 ```toml
-[hooks]
-notify = "/absolute/path/to/PromptVC/apps/cli/hooks/codex-notify.sh"
+notify = ["/absolute/path/to/PromptVC/apps/cli/hooks/codex-notify.sh"]
 ```
 Tip: run `pwd` inside the PromptVC repo to get the absolute path.
 

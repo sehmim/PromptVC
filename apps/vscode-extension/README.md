@@ -138,16 +138,21 @@ Windows: run `promptvc` and `codex` from Git Bash and ensure `jq` is installed.
 
 **Requirements:**
 - Node.js 22+ (use nvm: `nvm install 22 && nvm use 22`)
+- npm 11.5.1 (set `PROMPTVC_EXPECTED_NPM_VERSION` to override)
 - Git
 - jq (required for per-prompt capture)
+- Codex CLI 0.80.0 (set `PROMPTVC_EXPECTED_CODEX_VERSION` to override)
 
 ```bash
 cd your-repo
+promptvc config
 promptvc init
 codex
 ```
 
 PromptVC will begin tracking prompts automatically.
+
+If `promptvc config` or `promptvc init` blocks due to version mismatch, set `PROMPTVC_ALLOW_VERSION_MISMATCH=1`.
 
 ---
 

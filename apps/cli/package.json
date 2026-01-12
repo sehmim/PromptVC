@@ -26,7 +26,7 @@
     "clean": "rm -rf dist",
     "dev": "tsc --watch",
     "prepublishOnly": "pnpm run build",
-    "postinstall": "chmod +x hooks/*.sh || true",
+    "postinstall": "chmod +x hooks/* || true",
     "typecheck": "tsc --noEmit"
   },
   "engines": {

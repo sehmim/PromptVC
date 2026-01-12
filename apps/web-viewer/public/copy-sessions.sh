@@ -11,6 +11,7 @@ echo ""
 if [ ! -d ".promptvc" ]; then
     echo "❌ Error: .promptvc folder not found in current directory"
     echo "   Please run this script from your project root directory"
+    echo "   If you haven't set up PromptVC yet, run: promptvc config && promptvc init"
     exit 1
 fi
 
@@ -18,6 +19,7 @@ fi
 if [ ! -f ".promptvc/sessions.json" ]; then
     echo "❌ Error: sessions.json not found in .promptvc folder"
     echo "   Make sure you have PromptVC sessions saved"
+    echo "   If needed, run a Codex session after promptvc config/init"
     exit 1
 fi
 

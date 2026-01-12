@@ -2,9 +2,20 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { spawnSync } from 'child_process';
-import * as readline from 'readline/promises';
 import kleur from 'kleur';
 import { renderLogo } from './branding';
+import {
+  getCodexVersionInfo,
+  getNotifyConfigLine,
+  getCodexVersionWarnings,
+  getNpmVersionInfo,
+  getNpmVersionWarnings,
+  EXPECTED_CODEX_VERSION,
+  EXPECTED_NPM_VERSION,
+  isVersionMismatch,
+  allowVersionMismatch,
+} from './toolVersions';
+import { promptYesNo } from './prompt';
 
 const getCodexConfigPath = (): string => path.join(os.homedir(), '.codex', 'config.toml');
 const getCodexDir = (): string => path.join(os.homedir(), '.codex');
@@ -59,26 +70,30 @@ const hasJq = (): boolean => {
   return result.status === 0;
 };
 
-const promptYesNo = async (message: string): Promise<boolean> => {
-  if (!process.stdin.isTTY) {
-    return false;
-  }
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-  try {
-    const answer = await rl.question(message);
-    return ['y', 'yes'].includes(answer.trim().toLowerCase());
-  } finally {
-    rl.close();
-  }
-};
-
-const upsertNotifyHook = (content: string, hookPath: string): string => {
+const upsertNotifyHook = (content: string, notifyLine: string): string => {
   const usesCrlf = content.includes('\r\n');
   const normalized = content.replace(/\r\n/g, '\n');
-  const notifyLine = `notify = "${hookPath}"`;
+
+  if (!normalized.trim()) {
+    const fresh = `${notifyLine}\n`;
+    return usesCrlf ? fresh.replace(/\n/g, '\r\n') : fresh;
+  }
+
+  const lines = normalized.split('\n');
+  const filtered = lines.filter((line) => !/^\s*notify\s*=/.test(line));
+  let insertIndex = filtered.findIndex((line) => /^\s*\[/.test(line));
+  if (insertIndex === -1) insertIndex = filtered.length;
+
+  filtered.splice(insertIndex, 0, notifyLine);
+  let updated = filtered.join('\n');
+  updated = updated.replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+
+  return usesCrlf ? updated.replace(/\n/g, '\r\n') : updated;
+};
+
+const upsertNotifyHookLegacy = (content: string, notifyLine: string): string => {
+  const usesCrlf = content.includes('\r\n');
+  const normalized = content.replace(/\r\n/g, '\n');
 
   if (!normalized.trim()) {
     const fresh = `[hooks]\n${notifyLine}\n`;
@@ -136,8 +151,13 @@ export const runConfigCommand = async (): Promise<void> => {
 
   const hookPath = getNotifyHookPath();
   const hookPathForConfig = normalizeHookPathForToml(hookPath);
+  const codexInfo = getCodexVersionInfo();
+  const npmInfo = getNpmVersionInfo();
+  const notifyConfig = getNotifyConfigLine(hookPathForConfig, codexInfo.version);
   const configPath = getCodexConfigPath();
-  const snippet = `[hooks]\nnotify = "${hookPathForConfig}"\n`;
+  const snippet = notifyConfig.useHooksSection
+    ? `[hooks]\n${notifyConfig.line}\n`
+    : `${notifyConfig.line}\n`;
 
   console.log(kleur.bold().cyan('PromptVC Config'));
   console.log(renderLogo());
@@ -165,6 +185,56 @@ export const runConfigCommand = async (): Promise<void> => {
   console.log(`${kleur.bold('Hook path:')} ${hookPathForConfig}`);
   console.log(`${kleur.bold('Codex config:')} ${configPath}`);
 
+  if (codexInfo.binaryPath) {
+    console.log(`${kleur.bold('Codex binary:')} ${codexInfo.binaryPath}`);
+  }
+  if (codexInfo.version) {
+    console.log(`${kleur.bold('Codex version:')} ${codexInfo.version}`);
+  } else if (codexInfo.raw) {
+    console.log(`${kleur.bold('Codex version:')} ${codexInfo.raw}`);
+  }
+  if (npmInfo.binaryPath) {
+    console.log(`${kleur.bold('npm binary:')} ${npmInfo.binaryPath}`);
+  }
+  if (npmInfo.version) {
+    console.log(`${kleur.bold('npm version:')} ${npmInfo.version}`);
+  } else if (npmInfo.raw) {
+    console.log(`${kleur.bold('npm version:')} ${npmInfo.raw}`);
+  }
+  const warnings = getCodexVersionWarnings(codexInfo.version);
+  if (warnings.length > 0) {
+    for (const warning of warnings) {
+      console.log(kleur.yellow(`Warning: ${warning}`));
+    }
+  }
+  const npmWarnings = getNpmVersionWarnings(npmInfo.version);
+  if (npmWarnings.length > 0) {
+    for (const warning of npmWarnings) {
+      console.log(kleur.yellow(`Warning: ${warning}`));
+    }
+  }
+  if (notifyConfig.useHooksSection) {
+    console.log(kleur.yellow('Warning: Codex is using the legacy [hooks] notify format; upgrade recommended.'));
+  }
+  console.log('');
+
+  const codexMismatch = isVersionMismatch(codexInfo.version, EXPECTED_CODEX_VERSION);
+  const npmMismatch = isVersionMismatch(npmInfo.version, EXPECTED_NPM_VERSION);
+  if ((codexMismatch || npmMismatch) && !allowVersionMismatch()) {
+    const reason = codexMismatch && npmMismatch
+      ? 'Codex and npm versions do not match the expected versions.'
+      : codexMismatch
+        ? 'Codex version does not match the expected version.'
+        : 'npm version does not match the expected version.';
+    console.log(kleur.yellow(`Warning: ${reason}`));
+    console.log(kleur.yellow('Set PROMPTVC_ALLOW_VERSION_MISMATCH=1 to bypass this check.'));
+    const shouldContinue = await promptYesNo('Continue anyway? (y/N): ');
+    if (!shouldContinue) {
+      process.exit(1);
+    }
+    console.log('');
+  }
+
   if (!fs.existsSync(hookPath)) {
     console.log(kleur.yellow('Warning: notify hook not found at this path.'));
   }
@@ -172,7 +242,9 @@ export const runConfigCommand = async (): Promise<void> => {
   try {
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
     const existing = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf-8') : '';
-    const updated = upsertNotifyHook(existing, hookPathForConfig);
+    const updated = notifyConfig.useHooksSection
+      ? upsertNotifyHookLegacy(existing, notifyConfig.line)
+      : upsertNotifyHook(existing, notifyConfig.line);
     fs.writeFileSync(configPath, updated, 'utf-8');
     console.log('');
     if (codexConfigured) {

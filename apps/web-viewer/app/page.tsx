@@ -241,6 +241,26 @@ export default function MarketingPage() {
                 The CLI records prompts and diffs from any terminal workflow, so
                 sessions are always tracked even outside VS Code.
               </p>
+              <p className="mt-4 text-xs text-gray-500">
+                Run{' '}
+                <code className="rounded bg-gray-900/5 px-1 py-0.5 font-medium text-gray-700">
+                  promptvc config
+                </code>{' '}
+                to wire the notify hook. PromptVC checks Codex 0.80.0 and npm 11.5.1
+                (override with{' '}
+                <code className="rounded bg-gray-900/5 px-1 py-0.5 font-medium text-gray-700">
+                  PROMPTVC_EXPECTED_CODEX_VERSION
+                </code>
+                ,{' '}
+                <code className="rounded bg-gray-900/5 px-1 py-0.5 font-medium text-gray-700">
+                  PROMPTVC_EXPECTED_NPM_VERSION
+                </code>{' '}
+                or{' '}
+                <code className="rounded bg-gray-900/5 px-1 py-0.5 font-medium text-gray-700">
+                  PROMPTVC_ALLOW_VERSION_MISMATCH=1
+                </code>
+                ).
+              </p>
             </div>
             <div className="overflow-hidden rounded-3xl border border-gray-200 bg-white/95 shadow-sm">
               <Image

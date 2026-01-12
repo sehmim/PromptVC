@@ -43,6 +43,7 @@ function redactPromptChange(change: PromptChange): PromptChange {
   return {
     ...change,
     prompt: redactSensitive(change.prompt),
+    response: change.response ? redactSensitive(change.response) : undefined,
     diff: redactSensitive(change.diff),
   };
 }
@@ -421,6 +422,7 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
   private updateInitContext(): void {
     if (!this.repoRoot) {
       void vscode.commands.executeCommand('setContext', 'promptvc.hasInit', false);
+      this.updateSessionsContext(false);
       return;
     }
 
@@ -428,6 +430,10 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
     const sessionsPath = path.join(promptvcDir, 'sessions.json');
     const hasInit = fs.existsSync(promptvcDir) && fs.existsSync(sessionsPath);
     void vscode.commands.executeCommand('setContext', 'promptvc.hasInit', hasInit);
+  }
+
+  private updateSessionsContext(hasSessions: boolean): void {
+    void vscode.commands.executeCommand('setContext', 'promptvc.hasSessions', hasSessions);
   }
 
   public setShowHiddenSessions(show: boolean): void {
@@ -497,9 +503,11 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
 
       this.sessionsFilePath = path.join(this.repoRoot, '.promptvc', 'sessions.json');
       console.log('PromptVC: Looking for sessions at:', this.sessionsFilePath);
+      this.updateSessionsContext(false);
 
       if (!fs.existsSync(this.sessionsFilePath)) {
         console.log('PromptVC: Sessions file does not exist yet');
+        this.updateSessionsContext(false);
         return;
       }
 
@@ -514,6 +522,7 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
    */
   private readSessions(): PromptSession[] {
     if (!this.sessionsFilePath || !fs.existsSync(this.sessionsFilePath)) {
+      this.updateSessionsContext(false);
       return [];
     }
 
@@ -521,11 +530,15 @@ class PromptSessionsProvider implements vscode.TreeDataProvider<TreeElement> {
       const data = fs.readFileSync(this.sessionsFilePath, 'utf-8');
       const sessions = JSON.parse(data);
       if (!Array.isArray(sessions)) {
+        this.updateSessionsContext(false);
         return [];
       }
-      return sessions.map(redactPromptSession);
+      const redactedSessions = sessions.map(redactPromptSession);
+      this.updateSessionsContext(redactedSessions.length > 0);
+      return redactedSessions;
     } catch (error) {
       console.error('PromptVC: Failed to read sessions:', error);
+      this.updateSessionsContext(false);
       return [];
     }
   }
@@ -1422,11 +1435,15 @@ function getPromptWebviewContent(promptChange: PromptChange, focusFile?: string)
   const promptTime = promptDate.getTime();
   const storageId = hashValue || `prompt-${Number.isNaN(promptTime) ? Date.now() : promptTime}`;
   const storageKey = `promptvc-viewed-${storageId}`;
+  const responseHtml = promptChange.response
+    ? `<h3>Response</h3><pre class="prompt-block">${escapeHtml(promptChange.response)}</pre>`
+    : '';
 
   const bodyHtml = `
     <div class="section">
         <h3>Prompt</h3>
         <pre class="prompt-block">${escapeHtml(promptChange.prompt)}</pre>
+        ${responseHtml}
 
         ${renderFilesChangedHeading('Files Changed', diffFiles.length)}
         ${filesSectionHtml}
@@ -1462,6 +1479,9 @@ function getWebviewContent(session: PromptSession): string {
           const promptFiles = resolveFilesFromDiff(pc.files, parsedPromptDiff);
           const totalAdditions = parsedPromptDiff.reduce((sum, file) => sum + file.additions, 0);
           const totalDeletions = parsedPromptDiff.reduce((sum, file) => sum + file.deletions, 0);
+          const responseHtml = pc.response
+            ? `<div class="prompt-response"><div class="files-list-label">Response</div><pre class="prompt-block prompt-block-compact">${escapeHtml(pc.response)}</pre></div>`
+            : '';
           const promptDiffHtml = parsedPromptDiff.length > 0
             ? parsedPromptDiff.map((file, fileIndex) => generateFileDiffHtml(file, fileIndex)).join('')
             : `<div class="no-diff">No changes</div>`;
@@ -1481,6 +1501,7 @@ function getWebviewContent(session: PromptSession): string {
                 </span>
               </div>
               <div class="prompt-text">${escapeHtml(pc.prompt)}</div>
+              ${responseHtml}
               <div class="files-list">
                 <div class="files-list-label">Files (${promptFiles.length})</div>
                 ${promptFilesSectionHtml}

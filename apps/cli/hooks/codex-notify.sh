@@ -6,6 +6,44 @@
 # Codex may run hooks with a minimal PATH; include common locations (Homebrew, system bins)
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+SOUND_PATH="$SCRIPT_DIR/../assets/notify.mp3"
+FALLBACK_SOUND_PATH="$SCRIPT_DIR/../../../assets/notify.mp3"
+
+# Preferred capture implementation: Node (no jq dependency).
+# Fall back to the legacy jq-based shell implementation if Node is unavailable or fails.
+find_node() {
+    if command -v node > /dev/null 2>&1; then
+        command -v node
+        return 0
+    fi
+
+    for candidate in "/opt/homebrew/bin/node" "/usr/local/bin/node" "$HOME/.volta/bin/node"; do
+        if [ -x "$candidate" ]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+
+    if [ -d "$HOME/.nvm/versions/node" ]; then
+        # Pick the highest version directory
+        local nvm_node
+        nvm_node=$(ls -1d "$HOME/.nvm/versions/node/"*/bin/node 2>/dev/null | sort -V | tail -n 1)
+        if [ -n "$nvm_node" ] && [ -x "$nvm_node" ]; then
+            echo "$nvm_node"
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+NODE_BIN=$(find_node)
+NODE_HOOK="$SCRIPT_DIR/codex-notify-node.js"
+if [ -n "$NODE_BIN" ] && [ -f "$NODE_HOOK" ]; then
+    "$NODE_BIN" "$NODE_HOOK" && exit 0
+fi
+
 # Check if we're in a git repository and resolve the repo root
 if ! git rev-parse --git-dir > /dev/null 2>&1; then
     exit 0
@@ -33,9 +71,6 @@ if [ ! -f "$SESSIONS_FILE" ]; then
 fi
 
 # Play a notification sound when Codex finishes a response
-SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-SOUND_PATH="$SCRIPT_DIR/../assets/notify.mp3"
-FALLBACK_SOUND_PATH="$SCRIPT_DIR/../../../assets/notify.mp3"
 play_notify_sound() {
     if [ -f "$SETTINGS_FILE" ]; then
         SOUND_SETTING=""
@@ -69,9 +104,24 @@ play_notify_sound() {
 }
 trap 'play_notify_sound' EXIT
 
+# Ensure jq is available
+if ! command -v jq > /dev/null 2>&1; then
+    exit 0
+fi
+
 # Find the latest codex session file
-LATEST_SESSION=$(find "$HOME/.codex/sessions" -name "rollout-*.jsonl" -type f -print0 2>/dev/null | \
-    xargs -0 ls -t 2>/dev/null | head -1)
+LATEST_SESSION=""
+while IFS= read -r session_file; do
+    if [ -z "$session_file" ]; then
+        continue
+    fi
+    SESSION_CWD=$(head -n 1 "$session_file" | jq -r 'select(.type == "session_meta") | .payload.cwd // empty' 2>/dev/null)
+    if [ -n "$SESSION_CWD" ] && { [ "$SESSION_CWD" = "$REPO_DIR" ] || [[ "$SESSION_CWD" == "$REPO_DIR/"* ]]; }; then
+        LATEST_SESSION="$session_file"
+        break
+    fi
+done < <(find "$HOME/.codex/sessions" -name "rollout-*.jsonl" -type f -print0 2>/dev/null | \
+    xargs -0 ls -t 2>/dev/null)
 
 USE_CODEX_HISTORY="false"
 CODEX_HISTORY_FILE="$HOME/.codex/history.jsonl"
@@ -123,11 +173,6 @@ if [ "$CURRENT_SESSION_KEY" != "$PREV_SESSION" ]; then
     NEW_SESSION="true"
 fi
 
-# Ensure jq is available
-if ! command -v jq > /dev/null 2>&1; then
-    exit 0
-fi
-
 SESSIONS_JSON=$(cat "$SESSIONS_FILE" 2>/dev/null || echo "[]")
 if ! echo "$SESSIONS_JSON" | jq -e . > /dev/null 2>&1; then
     SESSIONS_JSON="[]"
@@ -149,12 +194,38 @@ fi
 # Extract all user prompts as a JSON array (preserves multi-line prompts as single entries)
 if [ "$USE_CODEX_HISTORY" = "true" ]; then
     jq --arg sid "$SESSION_ID" -n \
-        '[inputs | select(.session_id == $sid) | .text] | map(select(. != null))' \
+        '[inputs | select(.session_id == $sid) | {prompt: .text, response: ""}] | map(select(.prompt != null))' \
         "$CODEX_HISTORY_FILE" \
         > "$TEMP_PROMPTS_FILE" 2>/dev/null
 else
     cat "$LATEST_SESSION" | \
-        jq -R -s 'split("\n") | map(fromjson? | select(.type == "response_item" and .payload.role == "user") | .payload.content[0].text) | map(select(. != null))' \
+        jq -R -s '
+        def text_from_item:
+          .payload.content
+          | if type == "array" then
+              map(.text? // empty)
+              | map(select(type == "string"))
+              | join("\n")
+            else
+              if type == "string" then . else "" end
+            end;
+        def rows:
+          split("\n")
+          | map(fromjson? | select(.type == "response_item") | {role: .payload.role, text: text_from_item});
+        reduce rows[] as $item ({turns: [], current: null};
+          if $item.role == "user" and ($item.text | length > 0) then
+            if .current != null then .turns += [.current] else . end
+            | .current = {prompt: $item.text, response: ""}
+          elif $item.role == "assistant" and ($item.text | length > 0) then
+            if .current != null then
+              .current.response = (if .current.response == "" then $item.text else (.current.response + "\n\n" + $item.text) end)
+            else .
+            end
+          else .
+          end)
+        | if .current != null then .turns += [.current] else . end
+        | .turns
+        ' \
         > "$TEMP_PROMPTS_FILE" 2>/dev/null
 fi
 
@@ -165,15 +236,22 @@ fi
 # Filter out system prompts using jq (checking entire message content)
 # Remove prompts that contain system instruction markers
 FILTERED_PROMPTS=$(cat "$TEMP_PROMPTS_FILE" | \
-    jq 'map(select(
-        (. | startswith("# AGENTS.md") | not) and
-        (. | startswith("<INSTRUCTIONS>") | not) and
-        (. | startswith("<environment_context>") | not) and
-        (. | contains("# AGENTS.md instructions") | not) and
-        (. | contains("<INSTRUCTIONS>") | not) and
-        (. | contains("## Skills") | not) and
-        (. | contains("These skills are discovered at startup") | not)
-    ))' 2>/dev/null)
+    jq '
+    def strip_blocks:
+      gsub("\\r\\n"; "\n")
+      | sub("^# AGENTS\\.md instructions[^\\n]*\\n+"; "")
+      | gsub("<INSTRUCTIONS>[\\s\\S]*?</INSTRUCTIONS>\\s*"; "")
+      | gsub("<environment_context>[\\s\\S]*?</environment_context>\\s*"; "")
+      | gsub("<INSTRUCTIONS>[\\s\\S]*$"; "")
+      | gsub("<environment_context>[\\s\\S]*$"; "")
+      | gsub("^\\s+|\\s+$"; "");
+    map(
+      .prompt as $prompt
+      | .prompt = (if ($prompt | type) == "string" then ($prompt | strip_blocks) else "" end)
+      | .response = (.response // "")
+    )
+    | map(select(.prompt != null and (.prompt | length > 0)))
+    ' 2>/dev/null)
 
 # Count current prompts
 CURRENT_PROMPT_COUNT=$(echo "$FILTERED_PROMPTS" | jq 'length' 2>/dev/null || echo "0")
@@ -283,19 +361,25 @@ fi
 # Build array of new prompt entries
 NEW_ENTRIES="[]"
 for ((i=0; i<$PROMPT_COUNT; i++)); do
-    PROMPT=$(echo "$NEW_PROMPTS" | jq -r ".[$i]" 2>/dev/null)
+    PROMPT=$(echo "$NEW_PROMPTS" | jq -r ".[$i].prompt" 2>/dev/null)
+    RESPONSE=$(echo "$NEW_PROMPTS" | jq -r ".[$i].response" 2>/dev/null)
 
     if [ -z "$PROMPT" ] || [ "$PROMPT" = "null" ]; then
         continue
     fi
+    if [ "$RESPONSE" = "null" ]; then
+        RESPONSE=""
+    fi
 
     # Escape prompt for JSON
     ESCAPED_PROMPT=$(echo "$PROMPT" | jq -R -s '.')
+    ESCAPED_RESPONSE=$(echo "$RESPONSE" | jq -R -s '.')
 
     # Create prompt entry
     PROMPT_ENTRY=$(cat <<EOF
 {
   "prompt": $ESCAPED_PROMPT,
+  "response": $ESCAPED_RESPONSE,
   "timestamp": "$TIMESTAMP",
   "hash": "$GIT_HASH",
   "files": $FILES_ARRAY,
@@ -308,7 +392,7 @@ EOF
     NEW_ENTRIES=$(echo "$NEW_ENTRIES" | jq ". + [$PROMPT_ENTRY]" 2>/dev/null)
 done
 
-LATEST_PROMPT=$(echo "$NEW_PROMPTS" | jq -r '.[-1]' 2>/dev/null)
+LATEST_PROMPT=$(echo "$NEW_PROMPTS" | jq -r '.[-1].prompt' 2>/dev/null)
 if [ -z "$LATEST_PROMPT" ] || [ "$LATEST_PROMPT" = "null" ]; then
     LATEST_PROMPT=""
 fi

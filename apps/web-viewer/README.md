@@ -19,6 +19,11 @@ A lightweight, client-side web application for visualizing and managing PromptVC
 
 - Node.js 22+ and npm
 
+If you are using the PromptVC CLI to generate `sessions.json`, it expects:
+- Codex CLI 0.80.0 (override with `PROMPTVC_EXPECTED_CODEX_VERSION`)
+- npm 11.5.1 (override with `PROMPTVC_EXPECTED_NPM_VERSION`)
+- Bypass the guard with `PROMPTVC_ALLOW_VERSION_MISMATCH=1`
+
 ### Installation
 
 ```bash
